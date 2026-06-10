@@ -17,6 +17,34 @@ import type {
 } from './types.js';
 import { logger } from './logger.js';
 
+// ─── State Validation ──────────────────────────────────────────────
+
+/** RFC-4122-ish UUID matcher (any version). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const VALID_STATES: ReadonlySet<string> = new Set([
+  'pending',
+  'running',
+  'paused',
+  'completed',
+  'failed',
+]);
+
+/** Minimal structural validation for a persisted WorkflowInstance loaded from disk. */
+function isValidInstanceShape(v: unknown): v is WorkflowInstance {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  const isObj = (x: unknown) => typeof x === 'object' && x !== null && !Array.isArray(x);
+  if (typeof o.instance_id !== 'string' || !UUID_RE.test(o.instance_id)) return false;
+  if (typeof o.workflow_id !== 'string') return false;
+  if (typeof o.state !== 'string' || !VALID_STATES.has(o.state)) return false;
+  if (!isObj(o.trigger_input)) return false;
+  if (!isObj(o.phase_states)) return false;
+  if (!isObj(o.phase_outputs)) return false;
+  if (!isObj(o.loop_iterations)) return false;
+  return true;
+}
+
 // ─── Execution Context ─────────────────────────────────────────────
 
 export type ExecutionContext = {
@@ -809,15 +837,36 @@ export class WorkflowRunner {
   }
 
   private loadState(instanceId: string): WorkflowInstance {
+    // Validate the instance id is a UUID before touching the filesystem —
+    // prevents path traversal via crafted instance ids (e.g. "../../etc/passwd").
+    if (!UUID_RE.test(instanceId)) {
+      throw new Error(`invalid instance id "${instanceId}" (must be a UUID)`);
+    }
+    let raw: string;
     try {
-      const raw = readFileSync(`${instanceId}.state.json`, 'utf-8');
-      return JSON.parse(raw) as WorkflowInstance;
+      raw = readFileSync(`${instanceId}.state.json`, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         throw new Error(`state file not found for instance "${instanceId}"`);
       }
       throw new Error(`failed to load state for "${instanceId}": ${(err as Error).message}`);
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`corrupted state file for "${instanceId}": ${(err as Error).message}`);
+    }
+
+    if (!isValidInstanceShape(parsed)) {
+      throw new Error(`state file for "${instanceId}" failed structural validation`);
+    }
+    // Defense in depth: the on-disk id must match the requested id.
+    if ((parsed as WorkflowInstance).instance_id !== instanceId) {
+      throw new Error(`state file instance_id mismatch for "${instanceId}"`);
+    }
+    return parsed as WorkflowInstance;
   }
 
   private writePhaseOutput(

@@ -11,6 +11,10 @@ export default {
       'ts-jest',
       {
         useESM: true,
+        diagnostics: {
+          // TS151002: hybrid module kind warning under NodeNext — cosmetic for ts-jest.
+          ignoreCodes: [151002],
+        },
       },
     ],
   },

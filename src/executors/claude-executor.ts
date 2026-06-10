@@ -12,6 +12,8 @@ type ToolParam = Anthropic.Tool;
 export type ClaudeExecutorOptions = {
   toolRegistry?: ToolRegistry;
   maxToolRounds?: number;
+  /** Injectable client — primarily for testing. Defaults to a real Anthropic() instance. */
+  client?: Anthropic;
 };
 
 export class ClaudeExecutor implements AgentExecutor {
@@ -20,10 +22,14 @@ export class ClaudeExecutor implements AgentExecutor {
   private maxToolRounds: number;
 
   constructor(options?: ClaudeExecutorOptions) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY is not set');
+    if (options?.client) {
+      this.client = options.client;
+    } else {
+      if (!process.env.ANTHROPIC_API_KEY) {
+        throw new Error('ANTHROPIC_API_KEY is not set');
+      }
+      this.client = new Anthropic();
     }
-    this.client = new Anthropic();
     this.toolRegistry = options?.toolRegistry;
     this.maxToolRounds =
       options?.maxToolRounds ?? (Number(process.env.AGENTFLOW_MAX_TOOL_ROUNDS) || 10);

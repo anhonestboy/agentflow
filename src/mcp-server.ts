@@ -1,5 +1,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { parse } from './parser.js';
 import { compile } from './compiler.js';
@@ -188,16 +190,26 @@ async function main() {
     console.error(`[agentflow] Loaded .env from: ${dotenvPath}`);
   }
 
-  // Write diagnostic log to file (readable even when stderr is not visible)
+  // Write diagnostic log to file (readable even when stderr is not visible).
+  // Never write secret material — only presence/shape of credentials.
   const debugLog = [
     `[${new Date().toISOString()}] agentflow-mcp startup`,
     `AGENTFLOW_WORKFLOWS_DIR: ${workflowsDir}`,
     `AGENTFLOW_DEFAULT_PROVIDER: ${process.env.AGENTFLOW_DEFAULT_PROVIDER ?? '(not set)'}`,
-    `OPENROUTER_API_KEY: ${process.env.OPENROUTER_API_KEY ? process.env.OPENROUTER_API_KEY.slice(0, 16) + '...' : '(missing)'}`,
-    `ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? (process.env.ANTHROPIC_API_KEY.startsWith('sk-ant-') ? 'real key' : 'session token') : '(missing)'}`,
+    `OPENROUTER_API_KEY: ${process.env.OPENROUTER_API_KEY ? 'present' : '(missing)'}`,
+    `ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? (process.env.ANTHROPIC_API_KEY.startsWith('sk-ant-') ? 'present (api key)' : 'present (session token)') : '(missing)'}`,
     `dotenv path: ${join(workflowsDir, '.env')} exists=${existsSync(join(workflowsDir, '.env'))}`,
   ].join('\n');
-  writeFileSync('/tmp/agentflow-mcp-debug.log', debugLog + '\n');
+  // Per-user, non-predictable path with owner-only permissions (avoids symlink/TOCTOU
+  // and snooping on shared hosts). Honors AGENTFLOW_DEBUG_LOG if set.
+  const debugLogPath =
+    process.env.AGENTFLOW_DEBUG_LOG ?? join(tmpdir(), `agentflow-mcp-debug-${randomUUID()}.log`);
+  try {
+    writeFileSync(debugLogPath, debugLog + '\n', { mode: 0o600 });
+    console.error(`[agentflow] startup diagnostics: ${debugLogPath}`);
+  } catch {
+    /* diagnostics are best-effort */
+  }
 
   console.error(`[agentflow] Loading workflows from: ${workflowsDir}`);
 
