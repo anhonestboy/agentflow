@@ -191,7 +191,7 @@ describe('WorkflowRunner — resume', () => {
     const ir = compileSource(SIMPLE_WORKFLOW);
 
     // Creiamo uno stato con la fase "write" gia completata
-    const instanceId = 'test-resume-001';
+    const instanceId = '11111111-1111-4111-8111-111111111001';
     const stateData = {
       instance_id: instanceId,
       workflow_id: 'simple_test',
@@ -228,7 +228,7 @@ describe('WorkflowRunner — resume', () => {
   test('resume ri-esegue fasi failed', async () => {
     const ir = compileSource(SIMPLE_WORKFLOW);
 
-    const instanceId = 'test-resume-002';
+    const instanceId = '11111111-1111-4111-8111-111111111002';
     const stateData = {
       instance_id: instanceId,
       workflow_id: 'simple_test',
@@ -253,7 +253,7 @@ describe('WorkflowRunner — resume', () => {
   test('resume lancia errore se workflow_id non corrisponde', async () => {
     const ir = compileSource(SIMPLE_WORKFLOW);
 
-    const instanceId = 'test-resume-mismatch';
+    const instanceId = '11111111-1111-4111-8111-1111111110a1';
     const stateData = {
       instance_id: instanceId,
       workflow_id: 'wrong_workflow',
@@ -273,7 +273,7 @@ describe('WorkflowRunner — resume', () => {
   test('resume lancia errore se istanza gia completed', async () => {
     const ir = compileSource(SIMPLE_WORKFLOW);
 
-    const instanceId = 'test-resume-done';
+    const instanceId = '11111111-1111-4111-8111-1111111110d0';
     const stateData = {
       instance_id: instanceId,
       workflow_id: 'simple_test',
@@ -293,7 +293,9 @@ describe('WorkflowRunner — resume', () => {
   test('resume lancia errore se state file non esiste', async () => {
     const ir = compileSource(SIMPLE_WORKFLOW);
     const runner = new WorkflowRunner(ir, new MockAgentExecutor());
-    await expect(runner.resume('nonexistent-id')).rejects.toThrow('state file not found');
+    await expect(runner.resume('11111111-1111-4111-8111-1111111110ff')).rejects.toThrow(
+      'state file not found',
+    );
   });
 });
 
@@ -316,7 +318,7 @@ describe('WorkflowRunner — resume mid-loop', () => {
   test('resume a meta di un loop salta fasi completed nell iterazione corrente', async () => {
     const ir = compileSource(LOOP_WORKFLOW);
 
-    const instanceId = 'test-resume-loop';
+    const instanceId = '11111111-1111-4111-8111-1111111110c0';
 
     // Stato: iterazione 1, write completed ma review failed
     const stateData = {
@@ -369,7 +371,7 @@ describe('WorkflowRunner — resume mid-loop', () => {
   test('resume preserva loop_iterations count', async () => {
     const ir = compileSource(LOOP_WORKFLOW);
 
-    const instanceId = 'test-resume-loop-count';
+    const instanceId = '11111111-1111-4111-8111-1111111110c1';
     const stateData = {
       instance_id: instanceId,
       workflow_id: 'loop_test',

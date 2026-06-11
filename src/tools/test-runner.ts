@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,9 +24,10 @@ export class TestRunnerTool {
 
     try {
       writeFileSync(tmpFile, code, 'utf-8');
-      const stdout = execSync(`npx tsx ${tmpFile}`, {
+      const stdout = execFileSync('npx', ['tsx', tmpFile], {
         timeout,
         encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       return { success: true, stdout: stdout.trim(), stderr: '', exit_code: 0 };

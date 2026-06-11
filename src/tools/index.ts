@@ -1,7 +1,41 @@
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, realpathSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
+
+// ─── Path Security ─────────────────────────────────────────────────
+
+/**
+ * Resolves `relPath` against `workDir` and verifies — both lexically and
+ * via realpath (symlink-aware) — that the target stays inside `workDir`.
+ * Returns the absolute path, or null if the path escapes the sandbox.
+ */
+export function resolveInsideWorkDir(workDir: string, relPath: string): string | null {
+  const absPath = resolve(workDir, relPath);
+
+  // 1. Lexical check (catches ../ traversal)
+  const rel = relative(workDir, absPath);
+  if (rel.startsWith('..') || resolve(workDir, rel) !== absPath) return null;
+
+  // 2. Symlink-aware check: realpath of the deepest existing ancestor
+  //    (the file itself may not exist yet for writes)
+  try {
+    const realWorkDir = realpathSync(workDir);
+    let probe = absPath;
+    while (!existsSync(probe)) {
+      const parent = dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+    const realProbe = realpathSync(probe);
+    const realRel = relative(realWorkDir, realProbe);
+    if (realRel.startsWith('..') || realRel.startsWith('/')) return null;
+  } catch {
+    return null;
+  }
+
+  return absPath;
+}
 
 // ─── Tool Interface ────────────────────────────────────────────────
 
@@ -39,9 +73,10 @@ export class TestRunnerTool implements Tool {
     try {
       wfs(tmpFile, code, 'utf-8');
       process.stderr.write(`  🧪 [test_runner] running...\n`);
-      const stdout = execSync(`npx tsx ${tmpFile}`, {
+      const stdout = execFileSync('npx', ['tsx', tmpFile], {
         timeout,
         encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       return { success: true, stdout: stdout.trim(), stderr: '', exit_code: 0 };
@@ -104,11 +139,8 @@ export class FileWriteTool implements Tool {
 
   async execute(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const relPath = input.path as string;
-    const absPath = resolve(this.workDir, relPath);
-
-    // Security: ensure path stays within workDir
-    const rel = relative(this.workDir, absPath);
-    if (rel.startsWith('..') || resolve(this.workDir, rel) !== absPath) {
+    const absPath = resolveInsideWorkDir(this.workDir, relPath);
+    if (!absPath) {
       return { success: false, error: 'Path escapes working directory' };
     }
 
@@ -134,10 +166,8 @@ export class FileReadTool implements Tool {
 
   async execute(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const relPath = input.path as string;
-    const absPath = resolve(this.workDir, relPath);
-
-    const rel = relative(this.workDir, absPath);
-    if (rel.startsWith('..') || resolve(this.workDir, rel) !== absPath) {
+    const absPath = resolveInsideWorkDir(this.workDir, relPath);
+    if (!absPath) {
       return { success: false, error: 'Path escapes working directory' };
     }
 
@@ -161,19 +191,66 @@ export class ShellExecTool implements Tool {
     required: ['command'],
   };
 
+  private allowlist: string[] | null;
+  private disabled: boolean;
+
   constructor(
     private workDir: string,
     private timeoutMs = 30_000,
-  ) {}
+    options?: { allowlist?: string[]; disabled?: boolean },
+  ) {
+    // Env-level controls (CLI/MCP users can set these without touching code):
+    //   AGENTFLOW_DISABLE_SHELL=1          → shell_exec always refuses
+    //   AGENTFLOW_SHELL_ALLOWLIST=git,npm  → only listed commands, no shell metacharacters
+    this.disabled = options?.disabled ?? process.env.AGENTFLOW_DISABLE_SHELL === '1';
+    const envList = process.env.AGENTFLOW_SHELL_ALLOWLIST?.trim();
+    this.allowlist =
+      options?.allowlist ??
+      (envList
+        ? envList
+            .split(',')
+            .map((c) => c.trim())
+            .filter(Boolean)
+        : null);
+  }
+
+  /** Shell metacharacters that enable chaining/substitution — blocked in allowlist mode. */
+  private static readonly UNSAFE_CHARS = /[;&|`$<>(){}\n\r\\]/;
 
   async execute(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const command = input.command as string;
+    const command = String(input.command ?? '');
+
+    if (this.disabled) {
+      logger.warn(`[shell_exec] BLOCKED (AGENTFLOW_DISABLE_SHELL=1): ${command}`);
+      return { success: false, error: 'shell_exec is disabled (AGENTFLOW_DISABLE_SHELL=1)' };
+    }
+
+    if (this.allowlist) {
+      if (ShellExecTool.UNSAFE_CHARS.test(command)) {
+        logger.warn(`[shell_exec] BLOCKED (metacharacters in allowlist mode): ${command}`);
+        return {
+          success: false,
+          error:
+            'Command contains shell metacharacters (;|&`$<>(){} etc.) — not allowed when AGENTFLOW_SHELL_ALLOWLIST is set',
+        };
+      }
+      const binary = command.trim().split(/\s+/)[0] ?? '';
+      if (!this.allowlist.includes(binary)) {
+        logger.warn(`[shell_exec] BLOCKED (not in allowlist): ${command}`);
+        return {
+          success: false,
+          error: `Command "${binary}" is not in the allowlist (${this.allowlist.join(', ')})`,
+        };
+      }
+    }
+
     logger.info(`[shell_exec] ${command}`);
     try {
       const stdout = execSync(command, {
         cwd: this.workDir,
         timeout: this.timeoutMs,
         encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       return { success: true, stdout: stdout.trim(), exit_code: 0 };
