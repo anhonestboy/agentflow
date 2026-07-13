@@ -25,7 +25,7 @@ workflow code_quality_with_plan
     agent writer
       model: "claude-sonnet"
       mode: focused
-      tools: [file_write, code_review]
+      tools: [file_write]
       must_produce:
         - user_story
         - code
@@ -37,7 +37,7 @@ workflow code_quality_with_plan
     agent tester
       model: "claude-sonnet"
       mode: adversarial
-      tools: [test_runner, coverage_tool]
+      tools: [test_runner]
       must_produce:
         - test_results
         - edge_cases_tried

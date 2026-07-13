@@ -2,6 +2,8 @@ workflow custom_domain_provisioning
   description: "End-to-end custom domain provisioning with DNS, SSL, proxy, and database"
   version: "1.0.0"
 
+  # The built-in registry executes file_write/file_read/shell_exec/test_runner and only on claude models; this file models side-effecting steps without real tool bindings.
+
   trigger:
     on_event: domain_request
     input:
@@ -13,7 +15,6 @@ workflow custom_domain_provisioning
     agent dns_validator
       model: "claude-sonnet"
       mode: strict
-      tools: [dns_lookup, whois_check]
       must_produce:
         - domain_valid: bool
         - suggested_dns_records
@@ -28,7 +29,6 @@ workflow custom_domain_provisioning
     agent dns_checker
       model: "claude-sonnet"
       mode: patient
-      tools: [dns_lookup]
       must_produce:
         - dns_propagated: bool
         - current_records
@@ -36,7 +36,6 @@ workflow custom_domain_provisioning
     agent ssl_provisioner
       model: "claude-sonnet"
       mode: reliable
-      tools: [acme_client]
       must_produce:
         - ssl_certificate
         - ssl_expiry: datetime
@@ -45,7 +44,6 @@ workflow custom_domain_provisioning
     agent proxy_configurator
       model: "claude-sonnet"
       mode: precise
-      tools: [traefik_api, config_write]
       must_produce:
         - proxy_configured: bool
         - routing_rules
@@ -53,7 +51,6 @@ workflow custom_domain_provisioning
     agent db_updater
       model: "claude-sonnet"
       mode: reliable
-      tools: [database_write]
       must_produce:
         - domain_record_id: string
         - dns_zone_updated: bool
@@ -61,7 +58,6 @@ workflow custom_domain_provisioning
     agent health_checker
       model: "claude-sonnet"
       mode: adversarial
-      tools: [dns_lookup]
       must_produce:
         - domain_resolves: bool
         - ssl_valid: bool

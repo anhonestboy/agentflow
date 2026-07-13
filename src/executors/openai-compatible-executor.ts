@@ -1,6 +1,7 @@
-import type { AgentDef } from '../types.js';
+import type { AgentDef, TokenUsage } from '../types.js';
 import type { AgentExecutor, ExecutionContext } from '../runtime.js';
 import { withRetry } from '../retry.js';
+import { computeCostUsd } from '../pricing.js';
 import { logger } from '../logger.js';
 
 const REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
@@ -17,7 +18,15 @@ export type OpenAICompatibleConfig = {
   apiKeyEnvVar: string;
   /** Extra headers merged into every request (e.g. attribution headers). */
   extraHeaders?: Record<string, string>;
+  /**
+   * When true, ask the provider to include cost accounting in `usage`
+   * (OpenRouter: `usage: { include: true }` → response `usage.cost` in USD).
+   */
+  requestUsageAccounting?: boolean;
 };
+
+/** Usage/cost extracted from one chat-completion response. */
+type UsageResult = { usage?: TokenUsage; cost?: number };
 
 /**
  * Base executor for providers that expose an OpenAI-compatible
@@ -34,6 +43,7 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
   private readonly providerLabel: string;
   private readonly extraHeaders: Record<string, string>;
   private readonly retrySlug: string;
+  private readonly requestUsageAccounting: boolean;
 
   constructor(config: OpenAICompatibleConfig) {
     const key = process.env[config.apiKeyEnvVar]?.trim() ?? '';
@@ -46,6 +56,7 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     this.providerLabel = config.providerLabel;
     this.extraHeaders = config.extraHeaders ?? {};
     this.retrySlug = config.providerLabel.toLowerCase();
+    this.requestUsageAccounting = config.requestUsageAccounting ?? false;
   }
 
   async execute(
@@ -62,14 +73,62 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     const codeFields = (agent.must_produce ?? []).filter((i) => i.name === 'code');
     const textFields = (agent.must_produce ?? []).filter((i) => i.name !== 'code');
 
-    const textOutput = await this.fetchJson(agent, system, input, textFields);
+    const usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0 };
+    let sawUsage = false;
+    let reportedCost: number | undefined;
+
+    const json = await this.fetchJson(agent, system, input, textFields);
+    const textOutput = json.output;
+    sawUsage = this.mergeUsage(usage, json.usage) || sawUsage;
+    reportedCost = this.addCost(reportedCost, json.cost);
 
     if (codeFields.length > 0) {
       const code = await this.fetchCode(agent, system, input);
-      textOutput['code'] = code;
+      textOutput['code'] = code.code;
+      sawUsage = this.mergeUsage(usage, code.usage) || sawUsage;
+      reportedCost = this.addCost(reportedCost, code.cost);
     }
 
-    return { output: this.normalizeOutput(textOutput), metrics: { tool_calls: 0 } };
+    // Prefer the provider's reported cost (OpenRouter usage accounting); otherwise
+    // derive it from tokens via the static pricing map (undefined if model unknown).
+    const cost = reportedCost ?? (sawUsage ? computeCostUsd(this.model, usage) : undefined);
+
+    return {
+      output: this.normalizeOutput(textOutput),
+      metrics: {
+        tool_calls: 0,
+        model: this.model,
+        usage: sawUsage ? usage : undefined,
+        cost_usd: cost,
+      },
+    };
+  }
+
+  /** Fold one response's token usage into the running total. Returns true if any was present. */
+  private mergeUsage(acc: TokenUsage, u: TokenUsage | undefined): boolean {
+    if (!u) return false;
+    acc.prompt_tokens = (acc.prompt_tokens ?? 0) + (u.prompt_tokens ?? 0);
+    acc.completion_tokens = (acc.completion_tokens ?? 0) + (u.completion_tokens ?? 0);
+    return true;
+  }
+
+  private addCost(acc: number | undefined, add: number | undefined): number | undefined {
+    if (add === undefined) return acc;
+    return (acc ?? 0) + add;
+  }
+
+  /** Extract token usage and (optional) reported cost from a chat-completion response. */
+  private extractUsage(data: {
+    usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  }): UsageResult {
+    if (!data.usage) return {};
+    return {
+      usage: {
+        prompt_tokens: data.usage.prompt_tokens ?? 0,
+        completion_tokens: data.usage.completion_tokens ?? 0,
+      },
+      cost: typeof data.usage.cost === 'number' ? data.usage.cost : undefined,
+    };
   }
 
   private async fetchWithTimeout(body: unknown): Promise<Response> {
@@ -101,7 +160,7 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     system: string,
     input: Record<string, unknown>,
     fields: Array<{ name: string; type?: string }>,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{ output: Record<string, unknown>; usage?: TokenUsage; cost?: number }> {
     logger.debug(`[${agent.id}] fetchJson: ${fields.map((f) => f.name).join(', ')}`);
 
     const safeFields = fields.filter((f) => f.name !== 'code');
@@ -113,6 +172,7 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
           model: this.model,
           max_tokens: 2048,
           response_format: { type: 'json_object' },
+          ...(this.requestUsageAccounting ? { usage: { include: true } } : {}),
           messages: [
             { role: 'system', content: system },
             {
@@ -129,7 +189,9 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     const data = (await response.json()) as {
       choices?: Array<{ message: { content: string } }>;
       error?: { message: string };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
+    const { usage, cost } = this.extractUsage(data);
 
     if (!data.choices) {
       logger.error(`[${agent.id}] unexpected response: ${JSON.stringify(data).slice(0, 300)}`);
@@ -222,14 +284,14 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
         }
       }
 
-      return parsed;
+      return { output: parsed, usage, cost };
     } catch {
       // Try repaired version before giving up
       try {
         const repaired = repairTruncatedJson(rawJson);
         const parsed = JSON.parse(repaired);
         logger.warn(`[${agent.id}] JSON was truncated — repaired automatically`);
-        return parsed;
+        return { output: parsed, usage, cost };
       } catch {
         throw new Error(`[${agent.id}] Unparseable JSON:\n${content.slice(0, 200)}`);
       }
@@ -240,13 +302,14 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     agent: AgentDef,
     system: string,
     input: Record<string, unknown>,
-  ): Promise<string> {
+  ): Promise<{ code: string; usage?: TokenUsage; cost?: number }> {
     logger.debug(`[${agent.id}] fetchCode...`);
 
     const response = await withRetry(
       () =>
         this.fetchWithTimeout({
           model: this.model,
+          ...(this.requestUsageAccounting ? { usage: { include: true } } : {}),
           messages: [
             { role: 'system', content: system },
             {
@@ -263,7 +326,9 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     const data = (await response.json()) as {
       choices?: Array<{ message: { content: string } }>;
       error?: { message: string };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
+    const { usage, cost } = this.extractUsage(data);
 
     if (!data.choices) {
       logger.error(`[${agent.id}] unexpected response: ${JSON.stringify(data).slice(0, 300)}`);
@@ -275,12 +340,16 @@ export abstract class OpenAICompatibleExecutor implements AgentExecutor {
     const content = data.choices[0]?.message?.content ?? '';
 
     const match = content.match(/```(?:typescript|ts)?\n([\s\S]*?)```/);
-    if (match) return match[1].trim();
+    if (match) return { code: match[1].trim(), usage, cost };
 
-    return content
-      .replace(/^```[\w]*\n?/, '')
-      .replace(/\n?```$/, '')
-      .trim();
+    return {
+      code: content
+        .replace(/^```[\w]*\n?/, '')
+        .replace(/\n?```$/, '')
+        .trim(),
+      usage,
+      cost,
+    };
   }
 
   private buildSystemPrompt(agent: AgentDef, context?: ExecutionContext): string {

@@ -111,4 +111,21 @@ describe('DeepSeekExecutor', () => {
     const exec = new DeepSeekExecutor('deepseek-chat');
     await expect(exec.execute(REVIEWER, {})).rejects.toThrow(/DeepSeek 400/);
   });
+
+  test('derives cost from the static pricing map when tokens are reported', async () => {
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '{"verdict": "approved", "confidence": 0.9}' } }],
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 },
+      }),
+      text: async () => '',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    const { metrics } = await new DeepSeekExecutor('deepseek-chat').execute(REVIEWER, {});
+    expect(metrics?.usage).toEqual({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 });
+    // deepseek-chat static price: $0.27/1M in + $1.10/1M out
+    expect(metrics?.cost_usd).toBeCloseTo(0.27 + 1.1, 6);
+  });
 });

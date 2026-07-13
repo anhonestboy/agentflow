@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@anhonestboy/agentflow)](https://www.npmjs.com/package/@anhonestboy/agentflow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-130%20passed-brightgreen)](.)
+[![Tests](https://img.shields.io/badge/tests-231%20passed-brightgreen)](.)
 
 ---
 
@@ -183,12 +183,42 @@ agentflow check <file>             # Validate workflow + summary
 agentflow run <file> --input '…'   # Execute with real LLMs
 agentflow run <file> --mock        # Execute with mock agents (no API key needed)
 agentflow run <file> --approve-irreversible   # Authorize irreversible phases
+agentflow run <file> --output-dir <dir>       # Where phase outputs go (or $AGENTFLOW_OUTPUT_DIR)
+agentflow run <file> --state-dir  <dir>       # Where <uuid>.state.json goes (or $AGENTFLOW_STATE_DIR)
 agentflow compile <file>           # Compile to IR JSON
 agentflow validate <file>          # Validate only (no summary)
 agentflow mcp-config               # Print MCP server config for Claude Code
 agentflow models                   # List configured models + connectivity
 agentflow resume <file> --instance <uuid>  # Resume a paused/interrupted workflow
 ```
+
+### Exit codes (`run` / `resume`)
+
+`run` and `resume` return an honest exit code so scripts and orchestrators can branch on the outcome:
+
+| Code | Meaning |
+|---|---|
+| `0` | Workflow **completed** |
+| `1` | Workflow **failed** (or an unexpected terminal state) — a summary of `failed_steps` is printed |
+| `2` | Workflow **paused** at an irreversibility gate or a `human_action_required` phase — the resume command is printed |
+
+Every run also prints a stable, parseable cost line:
+
+```
+💰 total_cost_usd=0.012300 total_prompt_tokens=4500 total_completion_tokens=1200 cost_known=true
+```
+
+`cost_known=false` means no executor reported a dollar cost (e.g. local Ollama, or an unpriced model). Anthropic and DeepSeek costs come from a small static pricing map (override with `AGENTFLOW_PRICING_JSON='{"model":{"input":<usd/1M>,"output":<usd/1M>}}'`); OpenRouter reports its real cost via usage accounting. When cost is known, `max_cost` aborts the workflow once the accumulated cost exceeds the cap — including cost spent on schema-validation retries.
+
+A budget-aborted run is reported as **failed (exit 1)**, not paused: the receipt records a `budget` failed step, and the saved state remains **resumable** (`agentflow resume` continues from the last checkpoint, e.g. after raising `max_cost`).
+
+### State & output directories
+
+By default `<uuid>.state.json` is written to the current directory and outputs to `./output/<workflow-id>`. When AgentFlow runs inside a target repo (e.g. via flow), set `--state-dir` / `$AGENTFLOW_STATE_DIR` and `--output-dir` / `$AGENTFLOW_OUTPUT_DIR` to keep the working tree clean. `resume` reads state from the same configured directory.
+
+### Tools are `claude`-only
+
+Only the `claude` provider actually executes agent `tools` (`file_write`, `file_read`, `shell_exec`, `test_runner`). Declaring tools on an `openrouter`/`deepseek`/`ollama`/`agent-sdk` agent — or naming a tool the registry doesn't implement — is a **validation error (S14)**: the model would otherwise hallucinate the tool results. Either move the agent to a `claude` model or drop the tools.
 
 ## Language Reference
 
@@ -251,7 +281,7 @@ not (review.verdict == "needs_work")
  Tokenizer ──► Parser ──► Compiler (AST → IR)
                               │
                     ┌─────────▼──────────┐
-                    │   Validator (S1-S10) │
+                    │   Validator (S1-S14) │
                     └─────────┬──────────┘
                               │
                     ┌─────────▼──────────┐
@@ -290,7 +320,7 @@ git clone https://github.com/anhonestboy/agentflow.git
 cd agentflow
 npm install
 npm run build
-npm test          # 92 tests, 6 suites
+npm test          # 231 tests, 24 suites
 npm run dev -- check examples/code-quality.aflow
 ```
 

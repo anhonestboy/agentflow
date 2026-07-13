@@ -58,7 +58,7 @@ workflow <id>
 - `id` — unique identifier, snake_case
 - `description` — human-readable (shown in CLI and MCP tool description)
 - `version` — semantic versioning
-- `max_cost` — optional spend cap in USD. The workflow aborts (`state: failed`) once total agent cost exceeds it. Requires executors that report cost (e.g. `agent-sdk`); cost is accumulated in the execution receipt's `total_cost_usd`.
+- `max_cost` — optional spend cap in USD. The workflow aborts (`state: failed`) once total agent cost exceeds it. Cost is accumulated in the execution receipt's `total_cost_usd` and bites whenever cost is known: OpenRouter reports its real cost via usage accounting; Anthropic (`claude`) and DeepSeek are priced from a small static map (override with `AGENTFLOW_PRICING_JSON`); the Agent SDK reports subscription cost. Local Ollama and unpriced models record tokens but no dollar cost, so `max_cost` does not constrain them.
 
 ## Agents
 
@@ -95,6 +95,8 @@ agent <id>
 | `shell_exec` | Execute shell commands (30s timeout) |
 | `test_runner` | Run TypeScript code in a temp file |
 
+> ⚠️ **Tools run on `claude` models only.** Only the `claude` provider executes `tools`; `openrouter`, `deepseek`, `ollama`, and `agent-sdk` ignore them (the model would hallucinate the results). Declaring `tools` on a non-`claude` agent, or naming a tool that isn't one of the four above, is a **validation error (S14)** — move the agent to a `claude` model, or drop the tools.
+
 ### Model Resolution
 
 The `model` field references an alias from `agentflow.config.json`. The special alias `auto` resolves to the best available provider: Claude API key → OpenRouter → DeepSeek → Ollama.
@@ -107,7 +109,7 @@ phase <id>
   input: [<ref>, ...]
   output: [<name>, ...]
   inject_context: "<path>"
-  timeout: <duration>
+  timeout: <duration>      # ⚠️ parsed but not executed yet — S12 warns
   irreversible: true       # phase touches money/deploys/deletions — requires explicit approval
 ```
 
@@ -150,6 +152,21 @@ phase update_database
 ```
 
 On failure, each completed undo target's agent is re-invoked in **rollback mode** (a directive tells the agent to reverse, not repeat, its action — useful for agents with `shell_exec` that can deprovision). Undone phases are marked `rolled_back` in the receipt; the workflow still fails.
+
+### ⚠️ Parsed but not executed yet
+
+The parser and compiler accept the following features, but the current runtime does **not** act on them. They are preserved in the IR for forward-compatibility, and validation rule **S12** emits a warning whenever a workflow uses one, so nothing silently no-ops:
+
+| Feature | Where | Status |
+|---|---|---|
+| `poll` (interval / backoff / max_wait / condition) | phase | ⚠️ parsed, not executed — S12 warns |
+| `retry` (max_attempts / backoff / on_all_failed) | phase | ⚠️ parsed, not executed — S12 warns |
+| `timeout` + `on_timeout` | phase | ⚠️ parsed, not executed — S12 warns |
+| `completes_when` | phase | ⚠️ parsed, not executed — S12 warns |
+| `type: streaming_batch` | phase | ⚠️ parsed, not executed — S12 warns |
+| `rollback:` (workflow-level `priority_order` / `notify_user` / `log_to`) | workflow | ⚠️ parsed, not executed — S12 warns (distinct from the phase-level `rollback_on_fail`, which **is** executed) |
+
+`irreversible`, `human_action_required`, and `rollback_on_fail` are fully executed — they are not in this list. See the ROADMAP for planned support.
 
 ### Input References
 
@@ -227,7 +244,6 @@ workflow code_quality
     agent writer
       model: "local-fast"
       mode: focused
-      tools: [file_write]
       must_produce:
         - user_story
         - code
@@ -239,7 +255,6 @@ workflow code_quality
     agent tester
       model: "openrouter-smart"
       mode: adversarial
-      tools: [test_runner]
       must_produce:
         - test_results
         - edge_cases_tried

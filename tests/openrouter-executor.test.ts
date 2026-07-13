@@ -116,4 +116,36 @@ describe('OpenRouterExecutor', () => {
     const exec = new OpenRouterExecutor('m');
     await expect(exec.execute(REVIEWER, {})).rejects.toThrow(/OpenRouter 400/);
   });
+
+  test('requests usage accounting in the request body', async () => {
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '{"verdict": "approved", "confidence": 1}' } }],
+      }),
+      text: async () => '',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    await new OpenRouterExecutor('m').execute(REVIEWER, {});
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).usage).toEqual({ include: true });
+  });
+
+  test('reports the provider cost from usage accounting', async () => {
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '{"verdict": "approved", "confidence": 0.9}' } }],
+        usage: { prompt_tokens: 120, completion_tokens: 30, cost: 0.0042 },
+      }),
+      text: async () => '',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    const { metrics } = await new OpenRouterExecutor('m').execute(REVIEWER, {});
+    expect(metrics?.cost_usd).toBeCloseTo(0.0042, 6);
+    expect(metrics?.usage).toEqual({ prompt_tokens: 120, completion_tokens: 30 });
+    expect(metrics?.model).toBe('m');
+  });
 });

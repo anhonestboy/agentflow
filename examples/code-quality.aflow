@@ -13,7 +13,6 @@ workflow code_quality
     agent writer
       model: "openrouter-smart"
       mode: focused
-      tools: [file_write, code_review]
       must_produce:
         - user_story
         - code
@@ -25,7 +24,6 @@ workflow code_quality
     agent tester
       model: "openrouter-smart"
       mode: adversarial
-      tools: [test_runner, coverage_tool]
       must_produce:
         - test_results
         - edge_cases_tried

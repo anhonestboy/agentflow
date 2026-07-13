@@ -3,7 +3,9 @@ import type { AgentDef } from '../types.js';
 import type { AgentExecutor, ExecutionContext } from '../runtime.js';
 import type { ToolRegistry } from '../tools/index.js';
 import { withRetry } from '../retry.js';
+import { computeCostUsd } from '../pricing.js';
 import { logger } from '../logger.js';
+import type { TokenUsage } from '../types.js';
 
 type MessageParam = Anthropic.MessageParam;
 type ContentBlock = Anthropic.ContentBlock;
@@ -14,12 +16,20 @@ export type ClaudeExecutorOptions = {
   maxToolRounds?: number;
   /** Injectable client — primarily for testing. Defaults to a real Anthropic() instance. */
   client?: Anthropic;
+  /**
+   * Resolved model id (e.g. "claude-sonnet-4-5" from the config resolver).
+   * `agent.model` is usually a config ALIAS (e.g. "claude-sonnet") — using it
+   * raw would send an invalid id to the API and miss the pricing map. When
+   * set, this wins over `agent.model` for both the API call and pricing.
+   */
+  model?: string;
 };
 
 export class ClaudeExecutor implements AgentExecutor {
   private client: Anthropic;
   private toolRegistry?: ToolRegistry;
   private maxToolRounds: number;
+  private resolvedModel?: string;
 
   constructor(options?: ClaudeExecutorOptions) {
     if (options?.client) {
@@ -33,6 +43,7 @@ export class ClaudeExecutor implements AgentExecutor {
     this.toolRegistry = options?.toolRegistry;
     this.maxToolRounds =
       options?.maxToolRounds ?? (Number(process.env.AGENTFLOW_MAX_TOOL_ROUNDS) || 10);
+    this.resolvedModel = options?.model;
   }
 
   async execute(
@@ -65,12 +76,27 @@ export class ClaudeExecutor implements AgentExecutor {
     const hasRealTools = agentTools.length > 0;
     let totalToolCalls = 0;
 
+    // Prefer the resolved model id over the raw agent.model (config alias).
+    const model = this.resolvedModel ?? agent.model ?? 'claude-opus-4-5';
+    const usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0 };
+    let sawUsage = false;
+
+    const buildMetrics = (): import('../types.js').ExecutionMetrics => {
+      const u = sawUsage ? usage : undefined;
+      return {
+        tool_calls: totalToolCalls,
+        model,
+        usage: u,
+        cost_usd: computeCostUsd(model, u),
+      };
+    };
+
     for (let round = 0; round < this.maxToolRounds; round++) {
       logger.debug(`[${agent.id}] Tool round ${round + 1}/${this.maxToolRounds}`);
       const response = await withRetry(
         () =>
           this.client.messages.create({
-            model: agent.model ?? 'claude-opus-4-5',
+            model,
             max_tokens: 8096,
             system,
             messages,
@@ -81,6 +107,14 @@ export class ClaudeExecutor implements AgentExecutor {
         `${agent.id}/claude-api`,
       );
 
+      // Accumulate token usage across every round (input includes tool-result rounds).
+      if (response.usage) {
+        sawUsage = true;
+        usage.prompt_tokens = (usage.prompt_tokens ?? 0) + (response.usage.input_tokens ?? 0);
+        usage.completion_tokens =
+          (usage.completion_tokens ?? 0) + (response.usage.output_tokens ?? 0);
+      }
+
       // Check if produce_output was called
       const produceOutput = response.content.find(
         (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'produce_output',
@@ -88,7 +122,7 @@ export class ClaudeExecutor implements AgentExecutor {
       if (produceOutput) {
         return {
           output: produceOutput.input as Record<string, unknown>,
-          metrics: { tool_calls: totalToolCalls },
+          metrics: buildMetrics(),
         };
       }
 

@@ -14,6 +14,8 @@ export class OpenRouterExecutor extends OpenAICompatibleExecutor {
         'HTTP-Referer': 'https://github.com/anhonestboy/MCP-DSL',
         'X-Title': 'AgentFlow',
       },
+      // OpenRouter returns the real per-request cost in `usage.cost` when asked.
+      requestUsageAccounting: true,
     });
   }
 }
