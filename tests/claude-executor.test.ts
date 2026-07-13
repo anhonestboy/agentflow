@@ -74,6 +74,29 @@ describe('ClaudeExecutor (injected client)', () => {
     await expect(exec.execute(AGENT, {})).rejects.toThrow(/Max tool rounds/);
   });
 
+  test('reports token usage and computes cost from the pricing map', async () => {
+    const client = fakeClient([
+      {
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+        content: [
+          {
+            type: 'tool_use',
+            name: 'produce_output',
+            id: 'tu_1',
+            input: { draft: 'hi', word_count: 1 },
+          },
+        ],
+      },
+    ]);
+    const exec = new ClaudeExecutor({ client });
+    const { metrics } = await exec.execute(AGENT, {});
+    expect(metrics?.usage).toEqual({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 });
+    // AGENT.model is claude-sonnet-4-5 → $3/1M in + $15/1M out
+    expect(metrics?.cost_usd).toBeCloseTo(18, 6);
+    expect(metrics?.model).toBe('claude-sonnet-4-5');
+  });
+
   test('constructor throws without a client and without ANTHROPIC_API_KEY', () => {
     const saved = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;

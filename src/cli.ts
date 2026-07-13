@@ -16,7 +16,8 @@ import { OpenRouterExecutor } from './executors/openrouter-executor.js';
 import { DeepSeekExecutor } from './executors/deepseek-executor.js';
 import { HermesExecutor } from './executors/hermes-executor.js';
 import { AgentSdkExecutor } from './executors/agent-sdk-executor.js';
-import type { WorkflowIR, AgentDef } from './types.js';
+import { buildRunReport, usageTotals, formatCostLine } from './cli-report.js';
+import type { WorkflowIR, AgentDef, WorkflowInstance } from './types.js';
 
 function loadAndCompile(filePath: string): WorkflowIR {
   if (!existsSync(filePath)) {
@@ -53,6 +54,46 @@ function createExecutorResolver(
         return new OllamaExecutor(modelConfig);
     }
   };
+}
+
+/**
+ * Print phase results, loop info, cost, and a terminal summary, then exit with
+ * an honest code: 0 completed, 1 failed, 2 paused (gate/HITL).
+ */
+function printResultsAndExit(
+  instance: WorkflowInstance,
+  ctx: { file: string; command: 'run' | 'resume'; outputDir: string; stateDir?: string },
+): never {
+  // Phase results
+  console.log(chalk.bold('\n📊 Phase Results:'));
+  for (const [phaseId, state] of Object.entries(instance.phase_states)) {
+    const icon = state === 'completed' ? '✅' : state === 'failed' ? '❌' : '⏳';
+    console.log(`   ${icon} ${phaseId}: ${state}`);
+  }
+
+  // Loop info
+  for (const [loopId, iterations] of Object.entries(instance.loop_iterations)) {
+    console.log(chalk.cyan(`\n🔄 Loop "${loopId}": ${iterations} iteration(s)`));
+  }
+
+  // Cost (stable, parseable line)
+  console.log(chalk.bold(`\n💰 ${formatCostLine(usageTotals(instance))}`));
+
+  // Instance / persistence info
+  const stateName = `${instance.instance_id}.state.json`;
+  const statePath = ctx.stateDir ? `${ctx.stateDir}/${stateName}` : stateName;
+  console.log(chalk.bold(`\n📦 Workflow state: ${instance.state}`));
+  console.log(chalk.dim(`   Instance: ${instance.instance_id}`));
+  console.log(chalk.dim(`   State saved to: ${statePath}`));
+  console.log(chalk.dim(`   Outputs saved to: ${ctx.outputDir}/`));
+
+  // Terminal summary + honest exit code
+  const report = buildRunReport(instance, { file: ctx.file, command: ctx.command });
+  const color =
+    report.exitCode === 0 ? chalk.green : report.exitCode === 2 ? chalk.yellow : chalk.red;
+  console.log();
+  for (const line of report.lines) console.log(color(line));
+  process.exit(report.exitCode);
 }
 
 const program = new Command();
@@ -225,7 +266,11 @@ program
   )
   .option(
     '--output-dir <dir>',
-    'Directory for phase output files (default: ./output/<workflow-id>)',
+    'Directory for phase output files (default: ./output/<workflow-id>, or $AGENTFLOW_OUTPUT_DIR)',
+  )
+  .option(
+    '--state-dir <dir>',
+    'Directory for <uuid>.state.json files (default: CWD, or $AGENTFLOW_STATE_DIR)',
   )
   .action(
     async (
@@ -234,6 +279,7 @@ program
         input?: string;
         mock?: boolean;
         outputDir?: string;
+        stateDir?: string;
         approveIrreversible?: boolean;
       },
     ) => {
@@ -271,7 +317,9 @@ program
         }
 
         // Executor selection: per-agent model resolution
-        const outputDir = options.outputDir ?? `./output/${ir.workflow.id}`;
+        const outputDir =
+          options.outputDir ?? process.env.AGENTFLOW_OUTPUT_DIR ?? `./output/${ir.workflow.id}`;
+        const stateDir = options.stateDir ?? process.env.AGENTFLOW_STATE_DIR;
         const toolRegistry = createBuiltinRegistry(resolve(outputDir));
 
         const executor = options.mock
@@ -283,46 +331,17 @@ program
 
         const runner = new WorkflowRunner(ir, executor, {
           outputDir,
+          stateDir,
           approveIrreversible: options.approveIrreversible,
         });
+        // SIGTERM/SIGINT (e.g. flow's timeout path) → checkpoint and stop cleanly.
+        runner.enableGracefulShutdown();
 
         console.log(chalk.bold(`🚀 Running: ${ir.workflow.id}\n`));
 
         const instance = await runner.run(triggerInput);
 
-        if (instance.state === 'paused' && instance.execution_receipt?.resume_from_phase) {
-          const gated = ir.workflow.phases.find(
-            (p) => p.id === instance.execution_receipt?.resume_from_phase && p.irreversible,
-          );
-          if (gated) {
-            console.log(
-              chalk.yellow(
-                `\n🛑 Phase "${gated.id}" is marked irreversible — approval required.\n` +
-                  `   Review the state, then resume with:\n` +
-                  `   agentflow resume ${file} --instance ${instance.instance_id} --approve-irreversible`,
-              ),
-            );
-          }
-        }
-
-        // Phase results
-        console.log(chalk.bold('\n📊 Phase Results:'));
-        for (const [phaseId, state] of Object.entries(instance.phase_states)) {
-          const icon = state === 'completed' ? '✅' : state === 'failed' ? '❌' : '⏳';
-          console.log(`   ${icon} ${phaseId}: ${state}`);
-        }
-
-        // Loop info
-        for (const [loopId, iterations] of Object.entries(instance.loop_iterations)) {
-          console.log(chalk.cyan(`\n🔄 Loop "${loopId}": ${iterations} iteration(s)`));
-        }
-
-        // Final state
-        const stateIcon = instance.state === 'completed' ? '✅' : '❌';
-        console.log(chalk.bold(`\n${stateIcon} Workflow state: ${instance.state}`));
-        console.log(chalk.dim(`   Instance: ${instance.instance_id}`));
-        console.log(chalk.dim(`   State saved to: ${instance.instance_id}.state.json`));
-        console.log(chalk.dim(`   Outputs saved to: ${outputDir}/\n`));
+        printResultsAndExit(instance, { file, command: 'run', outputDir, stateDir });
       } catch (err) {
         console.error(chalk.red(`Runtime error: ${(err as Error).message}`));
         process.exit(1);
@@ -342,7 +361,11 @@ program
   )
   .option(
     '--output-dir <dir>',
-    'Directory for phase output files (default: ./output/<workflow-id>)',
+    'Directory for phase output files (default: ./output/<workflow-id>, or $AGENTFLOW_OUTPUT_DIR)',
+  )
+  .option(
+    '--state-dir <dir>',
+    'Directory to load/save <uuid>.state.json (default: CWD, or $AGENTFLOW_STATE_DIR)',
   )
   .action(
     async (
@@ -351,6 +374,7 @@ program
         instance?: string;
         mock?: boolean;
         outputDir?: string;
+        stateDir?: string;
         approveIrreversible?: boolean;
       },
     ) => {
@@ -371,7 +395,9 @@ program
         }
 
         // Executor selection: per-agent model resolution
-        const outputDir = options.outputDir ?? `./output/${ir.workflow.id}`;
+        const outputDir =
+          options.outputDir ?? process.env.AGENTFLOW_OUTPUT_DIR ?? `./output/${ir.workflow.id}`;
+        const stateDir = options.stateDir ?? process.env.AGENTFLOW_STATE_DIR;
         const toolRegistry = createBuiltinRegistry(resolve(outputDir));
 
         const executor = options.mock
@@ -383,31 +409,16 @@ program
 
         const runner = new WorkflowRunner(ir, executor, {
           outputDir,
+          stateDir,
           approveIrreversible: options.approveIrreversible,
         });
+        runner.enableGracefulShutdown();
 
         console.log(chalk.bold(`▶ Resuming: ${ir.workflow.id} — instance ${options.instance}\n`));
 
         const instance = await runner.resume(options.instance);
 
-        // Phase results
-        console.log(chalk.bold('\n📊 Phase Results:'));
-        for (const [phaseId, state] of Object.entries(instance.phase_states)) {
-          const icon = state === 'completed' ? '✅' : state === 'failed' ? '❌' : '⏳';
-          console.log(`   ${icon} ${phaseId}: ${state}`);
-        }
-
-        // Loop info
-        for (const [loopId, iterations] of Object.entries(instance.loop_iterations)) {
-          console.log(chalk.cyan(`\n🔄 Loop "${loopId}": ${iterations} iteration(s)`));
-        }
-
-        // Final state
-        const stateIcon = instance.state === 'completed' ? '✅' : '❌';
-        console.log(chalk.bold(`\n${stateIcon} Workflow state: ${instance.state}`));
-        console.log(chalk.dim(`   Instance: ${instance.instance_id}`));
-        console.log(chalk.dim(`   State saved to: ${instance.instance_id}.state.json`));
-        console.log(chalk.dim(`   Outputs saved to: ${outputDir}/\n`));
+        printResultsAndExit(instance, { file, command: 'resume', outputDir, stateDir });
       } catch (err) {
         console.error(chalk.red(`Resume error: ${(err as Error).message}`));
         process.exit(1);

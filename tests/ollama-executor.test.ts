@@ -77,4 +77,74 @@ describe('OllamaExecutor', () => {
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(String(url)).toMatch(/\/api\/chat$/);
   });
+
+  test('uses the RESOLVED model in the request body (not the env default)', async () => {
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ message: { content: '{"verdict": "approved", "confidence": 1}' } }),
+      text: async () => '',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    await new OllamaExecutor({ provider: 'ollama', model: 'llama3:70b' }).execute(REVIEWER, {});
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).model).toBe('llama3:70b');
+  });
+
+  test('throws a clear error with status + body on a non-OK HTTP response', async () => {
+    // 400 is not retryable, so it surfaces immediately (no backoff, no JSON.parse(undefined)).
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+      text: async () => 'bad model name',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    const exec = new OllamaExecutor({ provider: 'ollama', model: 'm' });
+    await expect(exec.execute(REVIEWER, {})).rejects.toThrow(/Ollama 400: bad model name/);
+  });
+
+  test('retries a transient 5xx failure then succeeds (wrapped in withRetry)', async () => {
+    let calls = 0;
+    const fetchMock = jest.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        return { ok: false, status: 500, json: async () => ({}), text: async () => 'busy' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ message: { content: '{"verdict": "approved", "confidence": 1}' } }),
+        text: async () => '',
+      };
+    });
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    const { output } = await new OllamaExecutor({ provider: 'ollama', model: 'm' }).execute(
+      REVIEWER,
+      {},
+    );
+    expect(output.verdict).toBe('approved');
+    expect(calls).toBe(2);
+  });
+
+  test('records token usage when Ollama reports it (local → cost not counted)', async () => {
+    const fetchMock = jest.fn<() => Promise<Response>>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        message: { content: '{"verdict": "approved", "confidence": 1}' },
+        prompt_eval_count: 120,
+        eval_count: 30,
+      }),
+      text: async () => '',
+    } as unknown as Response);
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    const { metrics } = await new OllamaExecutor({ provider: 'ollama', model: 'qwen3:8b' }).execute(
+      REVIEWER,
+      {},
+    );
+    expect(metrics?.usage).toEqual({ prompt_tokens: 120, completion_tokens: 30 });
+    expect(metrics?.cost_usd).toBeUndefined();
+    expect(metrics?.model).toBe('qwen3:8b');
+  });
 });

@@ -1,7 +1,15 @@
-import type { AgentDef } from '../types.js';
+import type { AgentDef, TokenUsage } from '../types.js';
 import type { AgentExecutor, ExecutionContext } from '../runtime.js';
 import type { ModelConfig } from '../model-resolver.js';
+import { withRetry } from '../retry.js';
 import { logger } from '../logger.js';
+
+/** Ollama's non-streaming chat response shape (subset we consume). */
+type OllamaChatResponse = {
+  message?: { content?: string };
+  prompt_eval_count?: number;
+  eval_count?: number;
+};
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'qwen3:30b';
@@ -29,14 +37,36 @@ export class OllamaExecutor implements AgentExecutor {
     const codeFields = (agent.must_produce ?? []).filter((i) => i.name === 'code');
     const textFields = (agent.must_produce ?? []).filter((i) => i.name !== 'code');
 
-    const textOutput = await this.fetchJson(agent, system, input, textFields);
+    const usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0 };
+    let sawUsage = false;
+
+    const json = await this.fetchJson(agent, system, input, textFields);
+    const textOutput = json.output;
+    sawUsage = this.addUsage(usage, json.usage) || sawUsage;
 
     if (codeFields.length > 0) {
       const code = await this.fetchCode(agent, system, input);
-      textOutput['code'] = code;
+      textOutput['code'] = code.code;
+      sawUsage = this.addUsage(usage, code.usage) || sawUsage;
     }
 
-    return { output: this.normalizeOutput(textOutput), metrics: { tool_calls: 0 } };
+    // Ollama runs locally — tokens are recorded, but there is no dollar cost to count.
+    return {
+      output: this.normalizeOutput(textOutput),
+      metrics: {
+        tool_calls: 0,
+        model: this.model,
+        usage: sawUsage ? usage : undefined,
+      },
+    };
+  }
+
+  /** Fold one response's token usage into the running total. Returns true if any was present. */
+  private addUsage(acc: TokenUsage, data: OllamaChatResponse): boolean {
+    if (data.prompt_eval_count === undefined && data.eval_count === undefined) return false;
+    acc.prompt_tokens = (acc.prompt_tokens ?? 0) + (data.prompt_eval_count ?? 0);
+    acc.completion_tokens = (acc.completion_tokens ?? 0) + (data.eval_count ?? 0);
+    return true;
   }
 
   private async fetchWithTimeout(url: string, body: unknown): Promise<Response> {
@@ -50,8 +80,10 @@ export class OllamaExecutor implements AgentExecutor {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const errBody = await response.text();
-        process.stderr.write(`  ❌ Ollama ${response.status}: ${errBody.slice(0, 500)}\n`);
+        // Throw so JSON.parse(undefined) can never happen downstream, and so
+        // withRetry can retry transient 5xx/timeout failures.
+        const errBody = await response.text().catch(() => '');
+        throw new Error(`Ollama ${response.status}: ${errBody.slice(0, 300)}`);
       }
       return response;
     } finally {
@@ -64,33 +96,37 @@ export class OllamaExecutor implements AgentExecutor {
     system: string,
     input: Record<string, unknown>,
     fields: Array<{ name: string; type?: string }>,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{ output: Record<string, unknown>; usage: OllamaChatResponse }> {
     logger.debug(`[${agent.id}] fetchJson: ${fields.map((f) => f.name).join(', ')}`);
 
     const safeFields = fields.filter((f) => f.name !== 'code');
     const fieldList = safeFields.map((i) => `"${i.name}": "<${i.type ?? 'string'}>"`).join(',\n  ');
 
-    const response = await this.fetchWithTimeout(`${OLLAMA_BASE_URL}/api/chat`, {
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: 'json',
-      keep_alive: '10m',
-      options: { temperature: 0, think: false, num_ctx: 4096 },
-      messages: [
-        { role: 'system', content: system },
-        {
-          role: 'user',
-          content: `Input:\n${JSON.stringify(input, null, 2)}\n\nRespond with JSON containing these fields:\n{\n  ${fieldList}\n}\n\nNOTE: verdict must be EXACTLY "approved" or "needs_work"`,
-        },
-      ],
-    });
+    const data = await withRetry(
+      () =>
+        this.fetchWithTimeout(`${OLLAMA_BASE_URL}/api/chat`, {
+          model: this.model,
+          stream: false,
+          format: 'json',
+          keep_alive: '10m',
+          options: { temperature: 0, think: false, num_ctx: 4096 },
+          messages: [
+            { role: 'system', content: system },
+            {
+              role: 'user',
+              content: `Input:\n${JSON.stringify(input, null, 2)}\n\nRespond with JSON containing these fields:\n{\n  ${fieldList}\n}\n\nNOTE: verdict must be EXACTLY "approved" or "needs_work"`,
+            },
+          ],
+        }).then((r) => r.json() as Promise<OllamaChatResponse>),
+      `${agent.id}/ollama-chat`,
+    );
 
     logger.debug(`[${agent.id}] fetchJson response received`);
 
-    const data = (await response.json()) as { message: { content: string } };
+    const content = data.message?.content ?? '';
 
     try {
-      const parsed = JSON.parse(data.message.content);
+      const parsed = JSON.parse(content);
       logger.debug(`[${agent.id}] fields received: ${Object.keys(parsed).join(', ')}`);
 
       // Fuzzy normalization of missing fields
@@ -120,9 +156,9 @@ export class OllamaExecutor implements AgentExecutor {
         }
       }
 
-      return parsed;
+      return { output: parsed, usage: data };
     } catch {
-      throw new Error(`[${agent.id}] Unparseable JSON:\n${data.message.content.slice(0, 200)}`);
+      throw new Error(`[${agent.id}] Unparseable JSON:\n${content.slice(0, 200)}`);
     }
   }
 
@@ -130,37 +166,43 @@ export class OllamaExecutor implements AgentExecutor {
     agent: AgentDef,
     system: string,
     input: Record<string, unknown>,
-  ): Promise<string> {
+  ): Promise<{ code: string; usage: OllamaChatResponse }> {
     logger.debug(`[${agent.id}] fetchCode...`);
 
-    const response = await this.fetchWithTimeout(`${OLLAMA_BASE_URL}/api/chat`, {
-      model: OLLAMA_MODEL,
-      stream: false,
-      keep_alive: '10m',
-      options: { temperature: 0, think: false, num_ctx: 4096 },
-      messages: [
-        { role: 'system', content: system },
-        {
-          role: 'user',
-          content: `Input:\n${JSON.stringify(input, null, 2)}\n\nRespond with a TypeScript code block:\n\`\`\`typescript\n// your code here\n\`\`\``,
-        },
-      ],
-    });
+    const data = await withRetry(
+      () =>
+        this.fetchWithTimeout(`${OLLAMA_BASE_URL}/api/chat`, {
+          model: this.model,
+          stream: false,
+          keep_alive: '10m',
+          options: { temperature: 0, think: false, num_ctx: 4096 },
+          messages: [
+            { role: 'system', content: system },
+            {
+              role: 'user',
+              content: `Input:\n${JSON.stringify(input, null, 2)}\n\nRespond with a TypeScript code block:\n\`\`\`typescript\n// your code here\n\`\`\``,
+            },
+          ],
+        }).then((r) => r.json() as Promise<OllamaChatResponse>),
+      `${agent.id}/ollama-code`,
+    );
 
     logger.debug(`[${agent.id}] fetchCode response received`);
 
-    const data = (await response.json()) as { message: { content: string } };
-    const content = data.message.content;
+    const content = data.message?.content ?? '';
 
     // Extract ```typescript ... ``` or ``` ... ``` block
     const match = content.match(/```(?:typescript|ts)?\n([\s\S]*?)```/);
-    if (match) return match[1].trim();
+    if (match) return { code: match[1].trim(), usage: data };
 
     // Fallback: manual cleanup
-    return content
-      .replace(/^```[\w]*\n?/, '')
-      .replace(/\n?```$/, '')
-      .trim();
+    return {
+      code: content
+        .replace(/^```[\w]*\n?/, '')
+        .replace(/\n?```$/, '')
+        .trim(),
+      usage: data,
+    };
   }
 
   private buildSystemPrompt(agent: AgentDef, context?: ExecutionContext): string {

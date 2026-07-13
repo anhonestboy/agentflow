@@ -332,4 +332,84 @@ describe('Validator', () => {
     const result = validate(ir);
     expect(result.warnings.some((w) => w.rule === 'S12')).toBe(false);
   });
+
+  test('S12: streaming_batch phase → named warning', () => {
+    const ir = makeIR({
+      agents: { writer: makeAgent('writer', { must_produce: [{ name: 'draft' }] }) },
+      phases: [makePhase('batch', { agent: 'writer', type: 'streaming_batch', output: ['draft'] })],
+    });
+    const result = validate(ir);
+    const s12 = result.warnings.filter((w) => w.rule === 'S12');
+    expect(s12.length).toBe(1);
+    expect(s12[0].message).toContain('streaming_batch');
+  });
+
+  // ─── S14: tools guard (provider + unknown tools) ────────────────
+
+  test('S14: tools on a non-claude provider → error', () => {
+    const ir = makeIR({
+      agents: {
+        writer: makeAgent('writer', {
+          model: 'openrouter-smart',
+          tools: ['file_write'],
+          must_produce: [{ name: 'draft' }],
+        }),
+      },
+      phases: [],
+    });
+    const result = validate(ir);
+    expect(result.ok).toBe(false);
+    const s14 = result.errors.filter((e) => e.rule === 'S14');
+    expect(s14.length).toBe(1);
+    expect(s14[0].message).toMatch(/openrouter/);
+    expect(s14[0].message).toMatch(/does not execute tools/);
+  });
+
+  test('S14: unknown tool name → error listing known tools', () => {
+    const ir = makeIR({
+      agents: {
+        writer: makeAgent('writer', {
+          model: 'claude-sonnet',
+          tools: ['file_write', 'code_review'],
+          must_produce: [{ name: 'draft' }],
+        }),
+      },
+      phases: [],
+    });
+    const result = validate(ir);
+    expect(result.ok).toBe(false);
+    const s14 = result.errors.filter((e) => e.rule === 'S14');
+    expect(s14.length).toBe(1);
+    expect(s14[0].message).toContain('code_review');
+    expect(s14[0].message).toContain('file_write, file_read, shell_exec, test_runner');
+  });
+
+  test('S14: known tools on a claude model → no error', () => {
+    const ir = makeIR({
+      agents: {
+        writer: makeAgent('writer', {
+          model: 'claude-sonnet',
+          tools: ['file_write', 'test_runner'],
+          must_produce: [{ name: 'draft' }],
+        }),
+      },
+      phases: [],
+    });
+    const result = validate(ir);
+    expect(result.errors.some((e) => e.rule === 'S14')).toBe(false);
+  });
+
+  test('S14: agent without tools → no error', () => {
+    const ir = makeIR({
+      agents: {
+        writer: makeAgent('writer', {
+          model: 'openrouter-smart',
+          must_produce: [{ name: 'draft' }],
+        }),
+      },
+      phases: [],
+    });
+    const result = validate(ir);
+    expect(result.errors.some((e) => e.rule === 'S14')).toBe(false);
+  });
 });

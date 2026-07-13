@@ -1,4 +1,9 @@
 import type { WorkflowIR, ValidationResult, ValidationIssue, Condition } from './types.js';
+import { resolveModel } from './model-resolver.js';
+import { BUILTIN_TOOL_NAMES } from './tools/index.js';
+
+/** Providers whose executors actually run agent `tools`. Others ignore them. */
+const TOOL_EXECUTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
 
 /** Collect all `phase.field` reference paths inside a condition tree. */
 function collectConditionRefs(cond: Condition | undefined, out: string[]): void {
@@ -240,7 +245,11 @@ export function validate(ir: WorkflowIR): ValidationResult {
     // human_action_required and rollback_on_fail ARE executed by the runtime now.
     const EXECUTED_TYPES = new Set(['standard', 'human_action_required']);
     const IGNORED_PHASE_FEATURES: Array<[string, (p: (typeof phases)[number]) => boolean]> = [
-      ['type (non-standard)', (p) => p.type !== undefined && !EXECUTED_TYPES.has(p.type)],
+      ['streaming_batch', (p) => p.type === 'streaming_batch'],
+      [
+        'type (non-standard)',
+        (p) => p.type !== undefined && !EXECUTED_TYPES.has(p.type) && p.type !== 'streaming_batch',
+      ],
       ['poll', (p) => p.poll !== undefined],
       ['retry', (p) => p.retry !== undefined],
       ['timeout', (p) => p.timeout !== undefined],
@@ -280,6 +289,36 @@ export function validate(ir: WorkflowIR): ValidationResult {
           phase: phase.id,
         });
       }
+    }
+  }
+
+  // S14: tools are only executed by the `claude` provider. Every other provider
+  // ignores agent.tools silently and the model hallucinates their results. Also
+  // reject tool names that no built-in tool implements — those are dropped at
+  // runtime today (e.g. `code_review`), so the model invents their output too.
+  for (const [agentId, agent] of Object.entries(agents)) {
+    if (!agent.tools || agent.tools.length === 0) continue;
+
+    // Unknown tool names → error listing the known tools.
+    const unknown = agent.tools.filter(
+      (t) => !(BUILTIN_TOOL_NAMES as readonly string[]).includes(t),
+    );
+    if (unknown.length > 0) {
+      errors.push({
+        rule: 'S14',
+        agent: agentId,
+        message: `Agent "${agentId}" declares unknown tool(s): ${unknown.join(', ')}. Known tools: ${BUILTIN_TOOL_NAMES.join(', ')}. Unknown tools are silently dropped at runtime — remove them or use a known tool.`,
+      });
+    }
+
+    // Tools on a provider that does not execute them → error.
+    const modelConfig = resolveModel(agent.model);
+    if (!TOOL_EXECUTING_PROVIDERS.has(modelConfig.provider)) {
+      errors.push({
+        rule: 'S14',
+        agent: agentId,
+        message: `Agent "${agentId}" declares tools [${agent.tools.join(', ')}] but its model "${agent.model ?? 'auto'}" resolves to provider "${modelConfig.provider}", which does not execute tools (only "claude" does) — the model would hallucinate the tool results. Either switch the agent to a claude model, or remove its tools.`,
+      });
     }
   }
 

@@ -75,9 +75,15 @@ export class AgentSdkExecutor implements AgentExecutor {
     }
 
     const output = this.parseOutput(agent, message.result ?? '');
+    const usage = message.usage
+      ? {
+          prompt_tokens: message.usage.input_tokens ?? 0,
+          completion_tokens: message.usage.output_tokens ?? 0,
+        }
+      : undefined;
     return {
       output: this.normalizeOutput(output),
-      metrics: { tool_calls: 0, cost_usd: message.total_cost_usd },
+      metrics: { tool_calls: 0, cost_usd: message.total_cost_usd, usage, model: this.model },
     };
   }
 

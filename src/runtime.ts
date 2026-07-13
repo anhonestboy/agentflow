@@ -133,6 +133,8 @@ export class WorkflowRunner {
   private ir: WorkflowIR;
   private resolveExecutor: ExecutorResolver;
   private outputDir?: string;
+  /** Directory for `<uuid>.state.json` files. Defaults to the CWD (back-compat). */
+  private stateDir?: string;
   private aborted = false;
   private approveIrreversible: boolean;
   /** Set when execution stops at an unapproved irreversible phase */
@@ -149,6 +151,7 @@ export class WorkflowRunner {
     executor: AgentExecutor | ExecutorResolver,
     options?: {
       outputDir?: string;
+      stateDir?: string;
       approveIrreversible?: boolean;
       userInputs?: Record<string, Record<string, unknown>>;
     },
@@ -156,8 +159,15 @@ export class WorkflowRunner {
     this.ir = ir;
     this.resolveExecutor = typeof executor === 'function' ? executor : () => executor;
     this.outputDir = options?.outputDir;
+    this.stateDir = options?.stateDir;
     this.approveIrreversible = options?.approveIrreversible ?? false;
     this.userInputs = options?.userInputs ?? {};
+  }
+
+  /** Absolute-or-relative path of the state file for an instance, honoring stateDir. */
+  private stateFilePath(instanceId: string): string {
+    const name = `${instanceId}.state.json`;
+    return this.stateDir ? join(this.stateDir, name) : name;
   }
 
   /** Register signal handlers for graceful shutdown. Call once before run(). */
@@ -432,6 +442,16 @@ export class WorkflowRunner {
           count: metrics.tool_calls,
           names: metrics.tool_names,
         };
+        // Record per-phase token usage/cost for the receipt
+        if (metrics.usage || metrics.cost_usd !== undefined) {
+          if (!receipt.usage) receipt.usage = {};
+          receipt.usage[phase.id] = {
+            prompt_tokens: metrics.usage?.prompt_tokens ?? 0,
+            completion_tokens: metrics.usage?.completion_tokens ?? 0,
+            cost_usd: metrics.cost_usd,
+            model: metrics.model,
+          };
+        }
         // Accumulate cost; enforce the workflow budget after the phase completes
         if (metrics.cost_usd !== undefined) {
           receipt.total_cost_usd = (receipt.total_cost_usd ?? 0) + metrics.cost_usd;
@@ -613,7 +633,7 @@ export class WorkflowRunner {
         const executor = this.resolveExecutor(agent);
         const retryResult = await executor.execute(agent, retryInput, context);
         current = retryResult.output;
-        // Track tool calls from retry
+        // Track tool calls and cost from retry
         if (retryResult.metrics) {
           const receipt = this.getOrCreateReceipt(instance);
           const existing = receipt.tool_calls[agent.id] ?? { count: 0 };
@@ -621,6 +641,10 @@ export class WorkflowRunner {
             count: existing.count + retryResult.metrics.tool_calls,
             names: [...(existing.names ?? []), ...(retryResult.metrics.tool_names ?? [])],
           };
+          // Retries cost real money too — count them toward total_cost_usd.
+          if (retryResult.metrics.cost_usd !== undefined) {
+            receipt.total_cost_usd = (receipt.total_cost_usd ?? 0) + retryResult.metrics.cost_usd;
+          }
         }
 
         // Track retry in execution log
@@ -844,7 +868,7 @@ export class WorkflowRunner {
     }
     let raw: string;
     try {
-      raw = readFileSync(`${instanceId}.state.json`, 'utf-8');
+      raw = readFileSync(this.stateFilePath(instanceId), 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         throw new Error(`state file not found for instance "${instanceId}"`);
@@ -1003,7 +1027,8 @@ export class WorkflowRunner {
 
   private saveState(instance: WorkflowInstance): void {
     try {
-      const filename = `${instance.instance_id}.state.json`;
+      if (this.stateDir) mkdirSync(this.stateDir, { recursive: true });
+      const filename = this.stateFilePath(instance.instance_id);
       writeFileSync(filename, JSON.stringify(instance, null, 2));
 
       // Track checkpoint

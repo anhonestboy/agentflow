@@ -268,6 +268,13 @@ export class ShellExecTool implements Tool {
 
 // ─── Factory ───────────────────────────────────────────────────────
 
+/**
+ * Names of the tools the built-in registry actually executes. Kept in sync
+ * with createBuiltinRegistry below and reused by validation (S14) so unknown
+ * tool names can be rejected instead of silently dropped at runtime.
+ */
+export const BUILTIN_TOOL_NAMES = ['file_write', 'file_read', 'shell_exec', 'test_runner'] as const;
+
 export function createBuiltinRegistry(workDir: string): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(new FileWriteTool(workDir));

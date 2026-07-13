@@ -305,9 +305,27 @@ export type ExecutionStep = {
   error?: string;
 };
 
+/** Prompt/completion token counts reported by an executor for one invocation. */
+export type TokenUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+};
+
+/** Per-phase token usage and (when known) cost, recorded in the execution receipt. */
+export type PhaseUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** USD cost for the phase, when the model's price is known; omitted otherwise */
+  cost_usd?: number;
+  /** Model that produced the usage (for auditing/pricing transparency) */
+  model?: string;
+};
+
 export type ExecutionReceipt = {
   execution_log: ExecutionStep[];
   tool_calls: Record<string, { count: number; names?: string[] }>;
+  /** Per-phase token usage/cost, for every executor that reports usage */
+  usage?: Record<string, PhaseUsage>;
   side_effects: { files_written: string[] };
   checkpoints: { phase_id: string; timestamp: string; iteration?: number }[];
   failed_steps: { phase_id: string; error: string; iteration?: number }[];
@@ -322,4 +340,8 @@ export type ExecutionMetrics = {
   tool_names?: string[];
   /** Cost of this agent invocation in USD, if the executor reports it */
   cost_usd?: number;
+  /** Prompt/completion token counts, if the executor reports them */
+  usage?: TokenUsage;
+  /** Model that produced this invocation (used for pricing/receipt) */
+  model?: string;
 };

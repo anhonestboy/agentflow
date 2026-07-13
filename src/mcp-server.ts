@@ -220,7 +220,12 @@ async function main() {
   // ─── Execution helpers ────────────────────────────────────────────
 
   function makeRunner(ir: WorkflowIR, approveIrreversible: boolean): WorkflowRunner {
-    const outputDir = resolve(`./output/${ir.workflow.id}`);
+    const outputDir = resolve(
+      process.env.AGENTFLOW_OUTPUT_DIR
+        ? `${process.env.AGENTFLOW_OUTPUT_DIR}/${ir.workflow.id}`
+        : `./output/${ir.workflow.id}`,
+    );
+    const stateDir = process.env.AGENTFLOW_STATE_DIR;
     const toolRegistry = createBuiltinRegistry(outputDir);
 
     const useMock = process.env.AGENTFLOW_MOCK === '1';
@@ -248,7 +253,7 @@ async function main() {
       }
     };
 
-    return new WorkflowRunner(ir, executor, { outputDir, approveIrreversible });
+    return new WorkflowRunner(ir, executor, { outputDir, stateDir, approveIrreversible });
   }
 
   function registerInstance(handle: {
