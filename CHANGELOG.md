@@ -2,6 +2,14 @@
 
 All notable changes to AgentFlow DSL will be documented in this file.
 
+## [1.0.21] — 2026-07-13
+
+### Added
+- **Native DeepSeek provider** (`provider: "deepseek"`): call DeepSeek's OpenAI-compatible API directly with `DEEPSEEK_API_KEY` — no OpenRouter detour. Model examples: `deepseek-chat`, `deepseek-reasoner`. Wired into config validation, `agentflow check`, `agentflow models` connectivity, the `init` wizard (provider choice, key prompt, `.env`, MCP env passthrough), and provider auto-detection (order: Claude → OpenRouter → DeepSeek → Ollama; `AGENTFLOW_DEFAULT_PROVIDER=deepseek` honored)
+
+### Changed
+- OpenRouter and DeepSeek executors now share an `OpenAICompatibleExecutor` base class (no behavior change for OpenRouter; its tests are unchanged and passing)
+
 ## [1.0.20] — 2026-06-08
 
 ### Added
