@@ -155,13 +155,16 @@ function buildModelChoices(models: ORModel[], defaultId: string) {
 function registerMcpServer(opts: {
   anthropicKey?: string;
   openrouterKey?: string;
+  deepseekKey?: string;
   workflowsDir: string;
 }): void {
   const defaultProvider = opts.openrouterKey
     ? 'openrouter'
-    : opts.anthropicKey
-      ? 'claude'
-      : 'ollama';
+    : opts.deepseekKey
+      ? 'deepseek'
+      : opts.anthropicKey
+        ? 'claude'
+        : 'ollama';
 
   // Remove existing registration if present (-s user = global)
   spawnSync('claude', ['mcp', 'remove', 'agentflow', '-s', 'user'], { stdio: 'ignore' });
@@ -176,6 +179,7 @@ function registerMcpServer(opts: {
     'OLLAMA_BASE_URL=http://localhost:11434',
   ];
   if (opts.openrouterKey) envArgs.push('-e', `OPENROUTER_API_KEY=${opts.openrouterKey}`);
+  if (opts.deepseekKey) envArgs.push('-e', `DEEPSEEK_API_KEY=${opts.deepseekKey}`);
   if (opts.anthropicKey) envArgs.push('-e', `ANTHROPIC_API_KEY=${opts.anthropicKey}`);
 
   // name before options, -s user = global scope
@@ -240,6 +244,7 @@ export async function runInit(): Promise<void> {
     choices: [
       { name: 'ollama       — local, free', value: 'ollama' },
       { name: 'openrouter   — cloud, access to all models', value: 'openrouter' },
+      { name: 'deepseek     — cloud, DeepSeek direct (deepseek-chat/reasoner)', value: 'deepseek' },
       { name: 'claude       — Anthropic direct', value: 'claude' },
       { name: 'auto         — cloud if API key present, otherwise Ollama', value: 'auto' },
     ],
@@ -248,6 +253,7 @@ export async function runInit(): Promise<void> {
   // ── 3. API Keys ──────────────────────────────────────────────────
   let anthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
   let openrouterKey = process.env.OPENROUTER_API_KEY ?? '';
+  let deepseekKey = process.env.DEEPSEEK_API_KEY ?? '';
 
   if (provider === 'claude' || provider === 'auto') {
     const existing = anthropicKey;
@@ -266,6 +272,17 @@ export async function runInit(): Promise<void> {
       default: existing || undefined,
     });
     if (k) openrouterKey = k;
+  }
+
+  if (provider === 'deepseek' || provider === 'auto') {
+    const existing = deepseekKey;
+    const masked = existing ? `${existing.slice(0, 8)}...` : undefined;
+    if (masked) console.log(chalk.dim(`   Existing key: ${masked}`));
+    const k = await input({
+      message: 'DEEPSEEK_API_KEY (https://platform.deepseek.com/api_keys)',
+      default: existing || undefined,
+    });
+    if (k) deepseekKey = k;
   }
 
   // ── 4. RAM ───────────────────────────────────────────────────────
@@ -371,6 +388,10 @@ export async function runInit(): Promise<void> {
     console.log(`   OpenRouter smart → ${chalk.cyan(orSmartModel)}`);
     console.log(`   OpenRouter free  → ${chalk.cyan(orFreeModel)}`);
   }
+  if (provider === 'deepseek' || deepseekKey) {
+    console.log(`   DeepSeek chat    → ${chalk.cyan('deepseek-chat')}`);
+    console.log(`   DeepSeek reason  → ${chalk.cyan('deepseek-reasoner')}`);
+  }
   console.log();
 
   const ok = await confirm({ message: 'Confirm?', default: true });
@@ -384,7 +405,12 @@ export async function runInit(): Promise<void> {
     models: {
       auto: {
         provider,
-        model: provider === 'openrouter' ? orSmartModel : ollamaSmartModel,
+        model:
+          provider === 'openrouter'
+            ? orSmartModel
+            : provider === 'deepseek'
+              ? 'deepseek-chat'
+              : ollamaSmartModel,
       },
       'local-fast': {
         provider: 'ollama',
@@ -398,6 +424,8 @@ export async function runInit(): Promise<void> {
       },
       'openrouter-smart': { provider: 'openrouter', model: orSmartModel },
       'openrouter-free': { provider: 'openrouter', model: orFreeModel },
+      'deepseek-chat': { provider: 'deepseek', model: 'deepseek-chat' },
+      'deepseek-reasoner': { provider: 'deepseek', model: 'deepseek-reasoner' },
       'claude-sonnet': { provider: 'claude', model: 'claude-sonnet-4-5' },
       'claude-opus': { provider: 'claude', model: 'claude-opus-4-5' },
     },
@@ -423,6 +451,10 @@ export async function runInit(): Promise<void> {
     writeEnvKey('OPENROUTER_API_KEY', openrouterKey);
     envUpdated = true;
   }
+  if (deepseekKey) {
+    writeEnvKey('DEEPSEEK_API_KEY', deepseekKey);
+    envUpdated = true;
+  }
   if (envUpdated) console.log(chalk.green('✅ .env updated'));
 
   // ── 10. .gitignore ───────────────────────────────────────────────
@@ -445,6 +477,7 @@ export async function runInit(): Promise<void> {
       registerMcpServer({
         anthropicKey: anthropicKey || undefined,
         openrouterKey: openrouterKey || undefined,
+        deepseekKey: deepseekKey || undefined,
         workflowsDir: resolve(process.cwd()),
       });
       console.log(chalk.green('✅ AgentFlow registered in Claude Code (claude mcp add)'));

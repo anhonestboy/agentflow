@@ -136,6 +136,7 @@ Copy the JSON output to your Claude Code MCP settings. Your workflow is now a to
 | **Claude** (Anthropic) | ✅ | Native SDK, multi-round tool use, API key (pay-as-you-go) |
 | **Claude Agent SDK** | ✅ | Subscription auth — uses your plan's monthly Agent SDK credit |
 | **OpenRouter** | ✅ | 315+ models, automatic provider routing |
+| **DeepSeek** | ✅ | Native API (`deepseek-chat`, `deepseek-reasoner`), no OpenRouter key needed |
 | **Ollama** | ✅ | Local execution, no API key needed |
 
 Configure model aliases for cost optimization — use cheap models for drafting, frontier models for review:
@@ -145,11 +146,14 @@ Configure model aliases for cost optimization — use cheap models for drafting,
   "models": {
     "local-fast":       { "provider": "ollama",      "model": "qwen3:8b" },
     "openrouter-smart": { "provider": "openrouter",  "model": "google/gemini-2.5-flash" },
+    "deepseek-chat":    { "provider": "deepseek",    "model": "deepseek-chat" },
     "claude-sonnet":    { "provider": "claude",      "model": "claude-sonnet-4-5" },
     "claude-plan":      { "provider": "agent-sdk",   "model": "claude-sonnet-4-5" }
   }
 }
 ```
+
+The `deepseek` provider talks to DeepSeek's native OpenAI-compatible API at `https://api.deepseek.com` and reads the key from `DEEPSEEK_API_KEY` — no OpenRouter account required. Example models: `deepseek-chat` (V3) and `deepseek-reasoner` (R1).
 
 ### Run on your Claude subscription (no API credits)
 

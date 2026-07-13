@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type ModelConfig = {
-  provider: 'claude' | 'ollama' | 'openrouter' | 'hermes' | 'agent-sdk';
+  provider: 'claude' | 'ollama' | 'openrouter' | 'deepseek' | 'hermes' | 'agent-sdk';
   model: string;
   options?: Record<string, unknown>;
 };
@@ -36,6 +36,14 @@ const FALLBACK_CONFIG: ConfigFile = {
     'openrouter-free': {
       provider: 'openrouter',
       model: 'meta-llama/llama-3.3-8b-instruct:free',
+    },
+    'deepseek-chat': {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    },
+    'deepseek-reasoner': {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
     },
     hermes: { provider: 'hermes', model: 'hermes-agent' },
     'claude-plan': { provider: 'agent-sdk', model: 'claude-sonnet-4-5' },
@@ -77,6 +85,13 @@ function resolveAuto(): ModelConfig {
       model: orSmart?.model ?? 'google/gemini-2.5-pro',
     };
   }
+  if (forced === 'deepseek' && process.env.DEEPSEEK_API_KEY?.trim()) {
+    const dsChat = config.models['deepseek-chat'];
+    return {
+      provider: 'deepseek',
+      model: dsChat?.model ?? 'deepseek-chat',
+    };
+  }
   if (forced === 'ollama') {
     const localSmart = config.models['local-smart'];
     return localSmart?.model
@@ -107,6 +122,13 @@ function resolveAuto(): ModelConfig {
     return {
       provider: 'openrouter',
       model: orSmart?.model ?? 'google/gemini-2.5-pro',
+    };
+  }
+  if (process.env.DEEPSEEK_API_KEY?.trim()) {
+    const dsChat = config.models['deepseek-chat'];
+    return {
+      provider: 'deepseek',
+      model: dsChat?.model ?? 'deepseek-chat',
     };
   }
   const localSmart = config.models['local-smart'];

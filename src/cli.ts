@@ -13,6 +13,7 @@ import { resolveModel } from './model-resolver.js';
 import { createBuiltinRegistry } from './tools/index.js';
 import { runInit } from './commands/init.js';
 import { OpenRouterExecutor } from './executors/openrouter-executor.js';
+import { DeepSeekExecutor } from './executors/deepseek-executor.js';
 import { HermesExecutor } from './executors/hermes-executor.js';
 import { AgentSdkExecutor } from './executors/agent-sdk-executor.js';
 import type { WorkflowIR, AgentDef } from './types.js';
@@ -41,6 +42,8 @@ function createExecutorResolver(
         return new ClaudeExecutor({ toolRegistry });
       case 'openrouter':
         return new OpenRouterExecutor(modelConfig.model);
+      case 'deepseek':
+        return new DeepSeekExecutor(modelConfig.model);
       case 'hermes':
         return new HermesExecutor();
       case 'agent-sdk':
@@ -438,6 +441,7 @@ program
       env['ANTHROPIC_API_KEY'] = process.env['ANTHROPIC_API_KEY'];
     if (process.env['OPENROUTER_API_KEY'])
       env['OPENROUTER_API_KEY'] = process.env['OPENROUTER_API_KEY'];
+    if (process.env['DEEPSEEK_API_KEY']) env['DEEPSEEK_API_KEY'] = process.env['DEEPSEEK_API_KEY'];
 
     const config = {
       mcpServers: {
@@ -451,7 +455,11 @@ program
 
     console.log(chalk.bold('\n📋 Add this to ~/.claude/settings.json under "mcpServers":\n'));
     console.log(JSON.stringify(config, null, 2));
-    if (!process.env['ANTHROPIC_API_KEY'] && !process.env['OPENROUTER_API_KEY']) {
+    if (
+      !process.env['ANTHROPIC_API_KEY'] &&
+      !process.env['OPENROUTER_API_KEY'] &&
+      !process.env['DEEPSEEK_API_KEY']
+    ) {
       console.log(chalk.yellow('\n⚠️  No API keys found in .env — run "agentflow init" first.'));
     }
     console.log();
@@ -492,6 +500,12 @@ program
       console.log(`   ${chalk.green('✅')} OpenRouter (OPENROUTER_API_KEY set)`);
     } else {
       console.log(`   ${chalk.dim('○')}  OpenRouter (OPENROUTER_API_KEY not set)`);
+    }
+
+    if (process.env.DEEPSEEK_API_KEY) {
+      console.log(`   ${chalk.green('✅')} DeepSeek (DEEPSEEK_API_KEY set)`);
+    } else {
+      console.log(`   ${chalk.dim('○')}  DeepSeek (DEEPSEEK_API_KEY not set)`);
     }
 
     try {

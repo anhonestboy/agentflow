@@ -7,6 +7,7 @@ describe('resolveModel (fallback config + auto-detection)', () => {
     // Start from a clean credential/provider environment for each test.
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.AGENTFLOW_DEFAULT_PROVIDER;
     delete process.env.OLLAMA_MODEL;
   });
@@ -26,6 +27,20 @@ describe('resolveModel (fallback config + auto-detection)', () => {
   test('resolves the agent-sdk alias', () => {
     const r = resolveModel('claude-plan');
     expect(r.provider).toBe('agent-sdk');
+  });
+
+  test('resolves the deepseek-chat alias to the deepseek provider', () => {
+    expect(resolveModel('deepseek-chat')).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      options: undefined,
+    });
+  });
+
+  test('resolves the deepseek-reasoner alias', () => {
+    const r = resolveModel('deepseek-reasoner');
+    expect(r.provider).toBe('deepseek');
+    expect(r.model).toBe('deepseek-reasoner');
   });
 
   test('an unknown alias falls back to auto-detection', () => {
@@ -51,6 +66,20 @@ describe('resolveModel (fallback config + auto-detection)', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-abc123';
     process.env.AGENTFLOW_DEFAULT_PROVIDER = 'ollama';
     expect(resolveModel('auto').provider).toBe('ollama');
+  });
+
+  test('auto detects a DeepSeek key when no other cloud key is set', () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-deepseek-xyz';
+    const r = resolveModel('auto');
+    expect(r.provider).toBe('deepseek');
+    expect(r.model).toBe('deepseek-chat');
+  });
+
+  test('AGENTFLOW_DEFAULT_PROVIDER=deepseek forces DeepSeek when its key is set', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-abc123';
+    process.env.DEEPSEEK_API_KEY = 'sk-deepseek-xyz';
+    process.env.AGENTFLOW_DEFAULT_PROVIDER = 'deepseek';
+    expect(resolveModel('auto').provider).toBe('deepseek');
   });
 
   test('no alias argument defaults to auto', () => {

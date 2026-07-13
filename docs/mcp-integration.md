@@ -29,7 +29,8 @@ Output:
       "env": {
         "AGENTFLOW_WORKFLOWS_DIR": "/path/to/your/workflows",
         "ANTHROPIC_API_KEY": "sk-ant-...",
-        "OPENROUTER_API_KEY": "sk-or-..."
+        "OPENROUTER_API_KEY": "sk-or-...",
+        "DEEPSEEK_API_KEY": "sk-..."
       }
     }
   }
@@ -131,4 +132,5 @@ The MCP server reads `agentflow.config.json` from `AGENTFLOW_WORKFLOWS_DIR` or u
 | `AGENTFLOW_WORKFLOWS_DIR` | Always | Directory containing `.aflow` files |
 | `ANTHROPIC_API_KEY` | Claude executor | Your Anthropic API key |
 | `OPENROUTER_API_KEY` | OpenRouter executor | Your OpenRouter API key |
+| `DEEPSEEK_API_KEY` | DeepSeek executor | Your DeepSeek API key (https://platform.deepseek.com) |
 | `OLLAMA_BASE_URL` | Ollama executor | Ollama server URL (default: `http://localhost:11434`) |
