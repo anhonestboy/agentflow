@@ -453,15 +453,7 @@ export class WorkflowRunner {
           };
         }
         // Accumulate cost; enforce the workflow budget after the phase completes
-        if (metrics.cost_usd !== undefined) {
-          receipt.total_cost_usd = (receipt.total_cost_usd ?? 0) + metrics.cost_usd;
-          const budget = this.ir.workflow.max_cost;
-          if (budget !== undefined && receipt.total_cost_usd > budget) {
-            this.budgetExceeded =
-              `cost $${receipt.total_cost_usd.toFixed(4)} exceeds max_cost ` +
-              `$${budget.toFixed(4)} after phase "${phase.id}"`;
-          }
-        }
+        this.accumulateCost(instance, metrics.cost_usd, `phase "${phase.id}"`);
       }
 
       // Verify must_produce — fill missing fields with defaults instead of crashing
@@ -624,6 +616,14 @@ export class WorkflowRunner {
       );
 
       if (attempt < retries) {
+        // Budget gate: never spend money on another retry once max_cost is
+        // exceeded — the workflow is going to abort anyway.
+        if (this.budgetExceeded) {
+          logger.warn(
+            `[${agent.id}] skipping remaining validation retries — ${this.budgetExceeded}`,
+          );
+          break;
+        }
         const retryInput = {
           ...input,
           _validation_errors: errorSummary,
@@ -641,10 +641,13 @@ export class WorkflowRunner {
             count: existing.count + retryResult.metrics.tool_calls,
             names: [...(existing.names ?? []), ...(retryResult.metrics.tool_names ?? [])],
           };
-          // Retries cost real money too — count them toward total_cost_usd.
-          if (retryResult.metrics.cost_usd !== undefined) {
-            receipt.total_cost_usd = (receipt.total_cost_usd ?? 0) + retryResult.metrics.cost_usd;
-          }
+          // Retries cost real money too — count them toward total_cost_usd
+          // and enforce the budget exactly like the main phase path.
+          this.accumulateCost(
+            instance,
+            retryResult.metrics.cost_usd,
+            `validation retry ${attempt + 1} of phase "${_phaseId}"`,
+          );
         }
 
         // Track retry in execution log
@@ -1083,5 +1086,26 @@ export class WorkflowRunner {
       error,
       iteration,
     });
+  }
+
+  /**
+   * Add an invocation's cost to the receipt total and flag the workflow for
+   * abort when `max_cost` is exceeded. Used for phase executions AND
+   * validation retries — every paid call counts toward the budget.
+   */
+  private accumulateCost(
+    instance: WorkflowInstance,
+    costUsd: number | undefined,
+    label: string,
+  ): void {
+    if (costUsd === undefined) return;
+    const receipt = this.getOrCreateReceipt(instance);
+    receipt.total_cost_usd = (receipt.total_cost_usd ?? 0) + costUsd;
+    const budget = this.ir.workflow.max_cost;
+    if (budget !== undefined && receipt.total_cost_usd > budget && !this.budgetExceeded) {
+      this.budgetExceeded =
+        `cost $${receipt.total_cost_usd.toFixed(4)} exceeds max_cost ` +
+        `$${budget.toFixed(4)} after ${label}`;
+    }
   }
 }

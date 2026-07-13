@@ -116,4 +116,59 @@ describe('Budget constraints (max_cost)', () => {
     const ir = compileSource(WORKFLOW(2.5));
     expect(ir.workflow.max_cost).toBe(2.5);
   });
+
+  test('max_cost is enforced on validation retries (no unbounded retry spend)', async () => {
+    // One phase whose output always fails schema validation, with retry: 3 and
+    // $0.50/call. Budget $0.50: the initial call reaches the cap, the FIRST
+    // retry exceeds it, and the remaining retries must NOT run.
+    const SCHEMA_WORKFLOW = `workflow retry_budget
+  max_cost: 0.5
+  agents:
+    agent writer
+      model: "mock"
+      must_produce:
+        - summary
+        - word_count: int
+      output_schema:
+        type: object
+        properties:
+          word_count:
+            type: integer
+            minimum: 10
+        required:
+          - word_count
+      validation:
+        retry: 3
+
+  phases:
+    phase write
+      agent: writer
+      input: [trigger.topic]
+      output: [summary, word_count]
+`;
+
+    let calls = 0;
+    const failingExecutor: AgentExecutor = {
+      async execute() {
+        calls++;
+        // word_count 1 < minimum 10 → always fails validation
+        return {
+          output: { summary: 'x', word_count: 1 },
+          metrics: { tool_calls: 0, cost_usd: 0.5 },
+        };
+      },
+    };
+
+    const ir = compileSource(SCHEMA_WORKFLOW);
+    const runner = new WorkflowRunner(ir, failingExecutor, { outputDir: dir });
+    const instance = await runner.run({ topic: 'x' });
+
+    expect(instance.state).toBe('failed');
+    expect(instance.execution_receipt?.failed_steps.some((s) => s.phase_id === 'budget')).toBe(
+      true,
+    );
+    // initial call ($0.50) + exactly ONE retry ($0.50) — retries 2 and 3 skipped
+    expect(calls).toBe(2);
+    expect(instance.execution_receipt?.total_cost_usd).toBeCloseTo(1.0, 5);
+  });
 });

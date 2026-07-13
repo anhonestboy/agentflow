@@ -40,7 +40,7 @@ function createExecutorResolver(
 
     switch (modelConfig.provider) {
       case 'claude':
-        return new ClaudeExecutor({ toolRegistry });
+        return new ClaudeExecutor({ toolRegistry, model: modelConfig.model });
       case 'openrouter':
         return new OpenRouterExecutor(modelConfig.model);
       case 'deepseek':

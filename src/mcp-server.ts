@@ -239,7 +239,7 @@ async function main() {
       console.error(`[agentflow] [${agent.id}] ${cfg.provider}/${cfg.model}`);
       switch (cfg.provider) {
         case 'claude':
-          return new ClaudeExecutor({ toolRegistry });
+          return new ClaudeExecutor({ toolRegistry, model: cfg.model });
         case 'openrouter':
           return new OpenRouterExecutor(cfg.model);
         case 'deepseek':

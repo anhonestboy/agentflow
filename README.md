@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@anhonestboy/agentflow)](https://www.npmjs.com/package/@anhonestboy/agentflow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-229%20passed-brightgreen)](.)
+[![Tests](https://img.shields.io/badge/tests-231%20passed-brightgreen)](.)
 
 ---
 
@@ -208,7 +208,9 @@ Every run also prints a stable, parseable cost line:
 💰 total_cost_usd=0.012300 total_prompt_tokens=4500 total_completion_tokens=1200 cost_known=true
 ```
 
-`cost_known=false` means no executor reported a dollar cost (e.g. local Ollama, or an unpriced model). Anthropic and DeepSeek costs come from a small static pricing map (override with `AGENTFLOW_PRICING_JSON='{"model":{"input":<usd/1M>,"output":<usd/1M>}}'`); OpenRouter reports its real cost via usage accounting. When cost is known, `max_cost` aborts the workflow once the accumulated cost exceeds the cap.
+`cost_known=false` means no executor reported a dollar cost (e.g. local Ollama, or an unpriced model). Anthropic and DeepSeek costs come from a small static pricing map (override with `AGENTFLOW_PRICING_JSON='{"model":{"input":<usd/1M>,"output":<usd/1M>}}'`); OpenRouter reports its real cost via usage accounting. When cost is known, `max_cost` aborts the workflow once the accumulated cost exceeds the cap — including cost spent on schema-validation retries.
+
+A budget-aborted run is reported as **failed (exit 1)**, not paused: the receipt records a `budget` failed step, and the saved state remains **resumable** (`agentflow resume` continues from the last checkpoint, e.g. after raising `max_cost`).
 
 ### State & output directories
 
@@ -318,7 +320,7 @@ git clone https://github.com/anhonestboy/agentflow.git
 cd agentflow
 npm install
 npm run build
-npm test          # 229 tests, 24 suites
+npm test          # 231 tests, 24 suites
 npm run dev -- check examples/code-quality.aflow
 ```
 

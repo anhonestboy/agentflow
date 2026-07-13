@@ -16,12 +16,20 @@ export type ClaudeExecutorOptions = {
   maxToolRounds?: number;
   /** Injectable client — primarily for testing. Defaults to a real Anthropic() instance. */
   client?: Anthropic;
+  /**
+   * Resolved model id (e.g. "claude-sonnet-4-5" from the config resolver).
+   * `agent.model` is usually a config ALIAS (e.g. "claude-sonnet") — using it
+   * raw would send an invalid id to the API and miss the pricing map. When
+   * set, this wins over `agent.model` for both the API call and pricing.
+   */
+  model?: string;
 };
 
 export class ClaudeExecutor implements AgentExecutor {
   private client: Anthropic;
   private toolRegistry?: ToolRegistry;
   private maxToolRounds: number;
+  private resolvedModel?: string;
 
   constructor(options?: ClaudeExecutorOptions) {
     if (options?.client) {
@@ -35,6 +43,7 @@ export class ClaudeExecutor implements AgentExecutor {
     this.toolRegistry = options?.toolRegistry;
     this.maxToolRounds =
       options?.maxToolRounds ?? (Number(process.env.AGENTFLOW_MAX_TOOL_ROUNDS) || 10);
+    this.resolvedModel = options?.model;
   }
 
   async execute(
@@ -67,7 +76,8 @@ export class ClaudeExecutor implements AgentExecutor {
     const hasRealTools = agentTools.length > 0;
     let totalToolCalls = 0;
 
-    const model = agent.model ?? 'claude-opus-4-5';
+    // Prefer the resolved model id over the raw agent.model (config alias).
+    const model = this.resolvedModel ?? agent.model ?? 'claude-opus-4-5';
     const usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0 };
     let sawUsage = false;
 
