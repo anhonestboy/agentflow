@@ -2,6 +2,25 @@
 
 All notable changes to AgentFlow DSL will be documented in this file.
 
+## [1.0.22] — 2026-07-13
+
+### ⚠️ Breaking
+- **CLI exit codes are now honest**: `run`/`resume` exit **0** only on `completed`, **1** on `failed` (with a failed-steps summary), **2** on `paused` (gate/HITL, with resume instructions). Previously the CLI always exited 0 and callers had to parse the state. External scripts relying on exit 0 + state parsing must be updated. Budget-aborted runs are `failed` (exit 1) but remain resumable after raising `max_cost`
+
+### Added
+- **S14 validation**: declaring `tools` on an agent whose model resolves to a provider that does not execute tools (anything but `claude`) is now an **error** — previously the tools were silently ignored and the model hallucinated results. Unknown tool names are errors too (previously silently dropped)
+- **Cost tracking for all priced providers**: per-phase token usage recorded in the receipt for anthropic/openrouter/deepseek/ollama; `cost_usd` computed from a static pricing map (`AGENTFLOW_PRICING_JSON` override; unknown model → cost not counted, never guessed); `run` prints a parseable `total_cost_usd=… cost_known=…` line; `max_cost` now bites for every priced provider **including validation retries**
+- **`--state-dir` / `AGENTFLOW_STATE_DIR`** and `AGENTFLOW_OUTPUT_DIR`: keep state/output files out of the CWD (default behavior unchanged)
+
+### Fixed
+- Ollama executor: uses the resolved model (the `OLLAMA_MODEL` constant silently overrode per-alias models), retries with backoff like the other executors, and throws a clear error on non-ok HTTP instead of failing later on `JSON.parse`
+- Claude cost computed correctly for alias models (the executor now receives the resolved model id — also fixes the alias leaking into the API request body)
+- Graceful shutdown (`SIGTERM` → checkpoint state) is now actually wired into `run`/`resume`
+- `streaming_batch` added to the S12 ignored-features warning (was silently ignored)
+
+### Docs
+- `language-reference` marks parsed-but-not-executed features explicitly; README test badge and validator range (S1-S14) fixed
+
 ## [1.0.21] — 2026-07-13
 
 ### Added
