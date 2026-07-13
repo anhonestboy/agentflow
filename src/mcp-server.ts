@@ -11,6 +11,7 @@ import type { WorkflowInstance } from './types.js';
 import { ClaudeExecutor } from './executors/claude-executor.js';
 import { OllamaExecutor } from './executors/ollama-executor.js';
 import { OpenRouterExecutor } from './executors/openrouter-executor.js';
+import { DeepSeekExecutor } from './executors/deepseek-executor.js';
 import { HermesExecutor } from './executors/hermes-executor.js';
 import { AgentSdkExecutor } from './executors/agent-sdk-executor.js';
 import { resolveModel } from './model-resolver.js';
@@ -236,6 +237,8 @@ async function main() {
           return new ClaudeExecutor({ toolRegistry });
         case 'openrouter':
           return new OpenRouterExecutor(cfg.model);
+        case 'deepseek':
+          return new DeepSeekExecutor(cfg.model);
         case 'hermes':
           return new HermesExecutor();
         case 'agent-sdk':

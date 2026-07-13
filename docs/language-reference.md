@@ -97,7 +97,7 @@ agent <id>
 
 ### Model Resolution
 
-The `model` field references an alias from `agentflow.config.json`. The special alias `auto` resolves to the best available provider: Claude API key → OpenRouter → Ollama.
+The `model` field references an alias from `agentflow.config.json`. The special alias `auto` resolves to the best available provider: Claude API key → OpenRouter → DeepSeek → Ollama.
 
 ## Phases
 
