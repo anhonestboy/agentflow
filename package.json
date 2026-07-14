@@ -1,6 +1,6 @@
 {
   "name": "@anhonestboy/agentflow",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "AgentFlow DSL — declarative language for composing multi-agent AI workflows. Write .aflow files, expose them as MCP tools. No integration code required.",
   "type": "module",
   "license": "MIT",

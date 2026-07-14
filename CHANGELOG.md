@@ -2,6 +2,11 @@
 
 All notable changes to AgentFlow DSL will be documented in this file.
 
+## [1.0.23] — 2026-07-14
+
+### Fixed
+- Version is now read from `package.json` at runtime instead of being hardcoded to `0.1.0` in three places: `agentflow --version` (CLI), `serverInfo.version` (MCP server) and `$agentflow_version` (compiled IR). New `src/version.ts` is the single source of truth; the compiler test asserts against the same constant so it can't drift again
+
 ## [1.0.22] — 2026-07-13
 
 ### ⚠️ Breaking
