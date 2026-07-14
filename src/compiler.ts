@@ -29,6 +29,7 @@ import type {
   RollbackConfig,
   OnSuccessConfig,
 } from './types.js';
+import { AGENTFLOW_VERSION } from './version.js';
 
 const SIDE_EFFECT_TOOLS = new Set([
   'file_write',
@@ -512,7 +513,7 @@ export function compile(ast: ASTWorkflow): WorkflowIR {
 
   return {
     $schema: 'https://agentflow.dev/ir/v0.1.schema.json',
-    $agentflow_version: '0.1.0',
+    $agentflow_version: AGENTFLOW_VERSION,
     compiled_at: new Date().toISOString(),
     workflow: {
       id: ast.id,

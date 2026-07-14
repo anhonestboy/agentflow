@@ -1,11 +1,12 @@
 import { compile, compileSource, parseDuration } from '../src/compiler.js';
 import { parse } from '../src/parser.js';
+import { AGENTFLOW_VERSION } from '../src/version.js';
 
 describe('Compiler', () => {
   test('compila workflow minimo → WorkflowIR con $schema, $agentflow_version, compiled_at', () => {
     const ir = compileSource('workflow minimal');
     expect(ir.$schema).toBe('https://agentflow.dev/ir/v0.1.schema.json');
-    expect(ir.$agentflow_version).toBe('0.1.0');
+    expect(ir.$agentflow_version).toBe(AGENTFLOW_VERSION);
     expect(ir.compiled_at).toBeDefined();
     expect(ir.workflow.id).toBe('minimal');
   });

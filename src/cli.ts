@@ -17,6 +17,7 @@ import { DeepSeekExecutor } from './executors/deepseek-executor.js';
 import { HermesExecutor } from './executors/hermes-executor.js';
 import { AgentSdkExecutor } from './executors/agent-sdk-executor.js';
 import { buildRunReport, usageTotals, formatCostLine } from './cli-report.js';
+import { AGENTFLOW_VERSION } from './version.js';
 import type { WorkflowIR, AgentDef, WorkflowInstance } from './types.js';
 
 function loadAndCompile(filePath: string): WorkflowIR {
@@ -100,7 +101,7 @@ const program = new Command();
 
 program
   .name('agentflow')
-  .version('0.1.0')
+  .version(AGENTFLOW_VERSION)
   .description('AgentFlow DSL — declarative language for multi-agent orchestration');
 
 // init command

@@ -16,6 +16,7 @@ import { HermesExecutor } from './executors/hermes-executor.js';
 import { AgentSdkExecutor } from './executors/agent-sdk-executor.js';
 import { resolveModel } from './model-resolver.js';
 import { createBuiltinRegistry } from './tools/index.js';
+import { AGENTFLOW_VERSION } from './version.js';
 import type { AgentDef } from './types.js';
 import type { WorkflowIR } from './types.js';
 
@@ -309,7 +310,7 @@ async function main() {
               },
               serverInfo: {
                 name: 'agentflow',
-                version: '0.1.0',
+                version: AGENTFLOW_VERSION,
               },
             }),
           );
