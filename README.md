@@ -1,3 +1,5 @@
+
+
 # AgentFlow DSL
 
 **A declarative language for multi-agent AI workflows — compile to MCP tools, no glue code required.**
@@ -90,7 +92,7 @@ workflow blog_post
   phases:
     phase research
       agent: researcher
-      input: [trigger.topic]
+      input: [trigger.input]
       output: [outline, key_points]
 
     phase write
@@ -118,7 +120,7 @@ workflow blog_post
 
 ```bash
 agentflow check my-workflow.aflow     # Validate
-agentflow run my-workflow.aflow --input 'topic="AI in photography"'
+agentflow run my-workflow.aflow --input 'input="AI in photography"'
 ```
 
 ### 5. Add to Claude Code
